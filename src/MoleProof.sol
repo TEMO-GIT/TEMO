@@ -16,7 +16,6 @@ import {IDcapAttestation} from "./interfaces/ITemo.sol";
 contract MoleProof {
     address public immutable mole;
     IDcapAttestation public immutable verifier;
-    bytes32 public immutable capsuleKey; // keccak256 of the mole's capsule public key
     bytes32 public immutable mrTdHash; // keccak256 of the 48-byte MRTD
     bytes32 public immutable rtmrHash; // keccak256 of RTMR0 || RTMR1 || RTMR2 || RTMR3 (192 bytes)
 
@@ -44,11 +43,10 @@ contract MoleProof {
 
     event MoleProven(address indexed mole, bytes6 fmspc, uint8 tcbStatus);
 
-    constructor(address mole_, IDcapAttestation verifier_, bytes32 capsuleKey_, bytes32 mrTdHash_, bytes32 rtmrHash_) {
+    constructor(address mole_, IDcapAttestation verifier_, bytes32 mrTdHash_, bytes32 rtmrHash_) {
         if (mole_ == address(0) || address(verifier_) == address(0)) revert ZeroAddress();
         mole = mole_;
         verifier = verifier_;
-        capsuleKey = capsuleKey_;
         mrTdHash = mrTdHash_;
         rtmrHash = rtmrHash_;
     }
@@ -71,7 +69,7 @@ contract MoleProof {
         if (keccak256(_slice(out, OUT_BODY + TD10_RTMR0, 192)) != rtmrHash) revert WrongMeasurement();
 
         bytes memory reportData = _slice(out, OUT_BODY + TD10_REPORT_DATA, 64);
-        bytes32 expected = keccak256(abi.encodePacked(mole, capsuleKey));
+        bytes32 expected = bytes32(uint256(uint160(mole))); // report data = the mole's address, left-padded
         if (bytes32(_slice(reportData, 0, 32)) != expected || bytes32(_slice(reportData, 32, 32)) != bytes32(0)) {
             revert WrongReportData();
         }

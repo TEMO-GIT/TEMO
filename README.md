@@ -96,9 +96,10 @@ TEMO/ETH pool is observed; trades elsewhere do not count toward seasons, labels 
 
 ## The mole
 
-The mole is a wallet whose key was generated inside a TDX enclave running a fixed container image. It can:
+The mole is a wallet whose key was generated inside a TDX enclave running a fixed container image. Before launch
+it does nothing: only its address goes into the constructors. After launch it can:
 
-- deploy the model, the burrow and its own proof before launch, and bind the hook to the burrow once;
+- prove itself once through `MoleProof.proveMole`;
 - commit new weights (the contract judges them);
 - publish every capsule's answers after a season, for the leaderboard.
 
@@ -108,11 +109,14 @@ hashes pinned at deployment. The proof is permanent and anyone can read it.
 
 ## Launch
 
-The whole launch is one transaction through the Programmable launch router. `Seeder.ignite` initializes the pool,
+The whole launch is one transaction through the Programmable launch router. It deploys all eight contracts (the
+seven above plus a second `FeeTill` for the dev share) with the mole's address and the enclave measurements as
+constructor arguments, then runs the initializers: `Seeder.ignite` initializes the pool,
 puts the entire supply into a single-sided position owned by `0x000000000000000000000000000000000000dEaD` through
 the canonical PositionManager, buys with part of the transaction value, seeds a second full-range position with the
 bought tokens and the remaining ETH, also owned by the dead address, and burns whatever is left over. No contract
-holds a withdrawal path for either position.
+holds a withdrawal path for either position. The burrow and the model are then bound to the hook, once, in the same
+transaction.
 
 For the first twenty swaps after the launch buy, a single buy may take at most 2% of the supply (20,000,000 tokens);
 a larger buy reverts. Sells are never capped, and from the twenty-first swap on there is no limit. Both numbers are

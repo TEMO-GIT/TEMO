@@ -9,12 +9,13 @@ import {ITemoToken, ITemoHook, IPriceFeed} from "./interfaces/ITemo.sol";
 import {Grid125} from "./libraries/Grid125.sol";
 
 /// @title Burrow
-/// @notice Seasons, capsules, verdicts, payouts. No owner. The mole may only bind the hook (once) and publish
-///         answers; everything else is open to anyone.
+/// @notice Seasons, capsules, verdicts, payouts. No owner. The mole may only publish answers; everything else is
+///         open to anyone. The hook is bound once by the launch graph.
 ///  - a capsule is a hash of 9 answers + salt; the ciphertext goes to an event only
 ///  - tokens are never locked: capsule weight = min(balance at season start, balance at season end)
 ///  - the season pool is the capsule share of the hook fee collected during the cycle
 ///  - nine questions, nine equal shares, exact bucket only, pro-rata by weight, unanswered shares roll forward
+///  - resolving a season is open to anyone and pays 0.01 ETH from its pool, so an idle season still gets settled
 contract Burrow {
     uint256 public constant WINDOW = 24 hours;
     uint256 public constant SEASON = 7 days;
@@ -23,6 +24,7 @@ contract Burrow {
     uint256 public constant CLAIM_WINDOW = 30 days;
     uint256 public constant QUESTIONS = 9;
     uint256 public constant PRICE_MAX_AGE = 1 hours;
+    uint256 public constant RESOLVE_BOUNTY = 0.01 ether; // paid from the season pool to whoever resolves it
     uint256 private constant Q96 = 2 ** 96;
     address private constant DEAD = 0x000000000000000000000000000000000000dEaD;
 
@@ -101,8 +103,8 @@ contract Burrow {
     // ================= wiring =================
 
     /// @notice Bind the pool hook: only the mole, once, only when the hook exists and points back here.
+    /// @notice One-shot binding, run by the launch graph after the pool is open: the hook must name this burrow.
     function bindHook(ITemoHook hook_) external {
-        if (msg.sender != mole) revert NotMole();
         if (hook != address(0)) revert HookAlreadyBound();
         if (address(hook_).code.length == 0 || hook_.burrow() != address(this)) revert WrongHook();
         uint40 t = hook_.launchedAt();
@@ -225,9 +227,15 @@ contract Burrow {
         d.winning[5] = Grid125.bucket(d.newWallets);
         d.winning[6] = d.crossed;
         d.winning[7] = d.maxDay;
-        d.winning[8] = Grid125.bucket(d.pool);
+        d.winning[8] = Grid125.bucket(d.pool); // the pool as the players saw it, before the bounty
 
+        uint256 bounty = d.pool < RESOLVE_BOUNTY ? d.pool : RESOLVE_BOUNTY;
+        d.pool -= bounty;
         emit Resolved(season, d.winning, d.pool, price, stale);
+        if (bounty != 0) {
+            (bool ok,) = msg.sender.call{value: bounty}("");
+            ok; // a caller that cannot receive ETH forfeits the bounty; the season is resolved either way
+        }
     }
 
     /// @dev <= -50% | -50..0 | 0..+100 | +100..+300 | +300..+900 | > +900, as 0..5. No trades: 2 (unchanged).
@@ -336,6 +344,11 @@ contract Burrow {
     }
 
     // ================= views =================
+
+    /// @notice Prize pool of a season (after the resolve bounty once resolved).
+    function poolOf(uint32 season) external view returns (uint256) {
+        return _seasons[season].pool;
+    }
 
     function seasonInfo(uint32 season)
         external

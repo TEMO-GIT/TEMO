@@ -25,7 +25,12 @@ contract MockHook {
     uint256[] public records;
     mapping(uint32 => uint256) public positions;
     address public burrow;
+    address public model;
     uint40 public launchedAt = 1;
+
+    function setModel(address m) external {
+        model = m;
+    }
 
     function push(uint256 r) external {
         records.push(r);
@@ -61,8 +66,8 @@ contract ModelTest is Test {
         proof = new MockProof(mole);
         hook = new MockHook();
         factory = new WeightsFactory();
-        model = new TemoModel(mole, proof, factory.make(_zeroWeights()));
-        vm.prank(mole);
+        model = new TemoModel(mole, proof, _zeroWeights());
+        hook.setModel(address(model));
         model.setHook(ITemoHook(address(hook)));
     }
 

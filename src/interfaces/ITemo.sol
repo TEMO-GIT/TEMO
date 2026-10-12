@@ -35,6 +35,7 @@ interface ITemoHook {
     function records(uint256 index) external view returns (uint256);
     function positions(uint32 id) external view returns (uint256);
     function burrow() external view returns (address);
+    function model() external view returns (address);
     function noteCapsule(address owner, uint40 timestamp) external;
 }
 

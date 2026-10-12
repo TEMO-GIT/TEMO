@@ -17,7 +17,7 @@ import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 
 import {TemoToken} from "../src/TemoToken.sol";
 import {TemoHook} from "../src/TemoHook.sol";
-import {TemoModel, WeightsStore} from "../src/TemoModel.sol";
+import {TemoModel} from "../src/TemoModel.sol";
 import {Burrow} from "../src/Burrow.sol";
 import {FeeTill} from "../src/FeeTill.sol";
 import {Seeder} from "../src/Seeder.sol";
@@ -42,12 +42,6 @@ contract MockFeed is IPriceFeed {
 
     function decimals() external pure returns (uint8) {
         return 8;
-    }
-}
-
-contract WeightsFactory {
-    function make(bytes memory data) external returns (address) {
-        return WeightsStore.create(data);
     }
 }
 
@@ -91,18 +85,12 @@ contract LaunchTest is Test {
             assertEq(fresh[i].balance, 0, "test address not empty");
         }
 
-        // satellites: the mole deploys them
-        vm.startPrank(mole);
+        // the launch graph (here: deployed by this test, which also plays the graph deployer); the mole is only an address
         proof = new MockProof(mole);
         feed = new MockFeed();
-        WeightsFactory wf = new WeightsFactory();
-        model = new TemoModel(mole, proof, wf.make(new bytes(177 * 2)));
-        vm.stopPrank();
-
-        // the launch graph (here: deployed by this test, which also plays the graph deployer)
+        model = new TemoModel(mole, proof, new bytes(177 * 2));
         seeder = new Seeder(dev, POSM, address(this));
         token = new TemoToken(address(seeder));
-        vm.prank(mole);
         burrow = new Burrow(mole, ITemoToken(address(token)), feed);
         platformTill = new FeeTill(PM, PLATFORM);
         devTill = new FeeTill(PM, dev);
@@ -141,11 +129,9 @@ contract LaunchTest is Test {
             buyEth: 0.07 ether
         });
         mainId = seeder.ignite{value: 0.1 ether}(address(token), address(hook), p);
-        // the mole binds the hook now that it exists
-        vm.startPrank(mole);
+        // the graph's initializers bind the hook now that the pool is open
         burrow.bindHook(ITemoHook(address(hook)));
         model.setHook(ITemoHook(address(hook)));
-        vm.stopPrank();
     }
 
     function _buy(address who, uint256 ethIn, bytes memory hookData) internal returns (uint256 got) {
@@ -368,7 +354,12 @@ contract LaunchTest is Test {
 
         // season ends; resolve; winners reveal
         vm.warp(t0 + 24 hours + 7 days + 1);
+        uint256 poolBefore = burrow.poolOf(1);
+        uint256 aliceBefore = alice.balance;
+        vm.prank(alice, alice);
         burrow.resolve(1);
+        assertEq(alice.balance - aliceBefore, 0.01 ether, "resolver gets the bounty");
+        assertEq(burrow.poolOf(1), poolBefore - 0.01 ether, "bounty comes out of the season pool");
         uint32[9] memory win = burrow.winning(1);
         emit log_named_uint("win q1 cap bucket", win[0]);
         emit log_named_uint("win q7 crossed", win[6]);
