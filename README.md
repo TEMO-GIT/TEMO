@@ -102,7 +102,7 @@ The mole is a wallet whose key was generated inside a TDX enclave running a fixe
 - publish every capsule's answers after a season, for the leaderboard.
 
 It cannot change any fee, move liquidity, pause anything or touch anyone's tokens. `TemoModel.proveMole` accepts
-one DCAP quote whose report data binds the mole's address and its capsule key, and whose measurements equal the
+one DCAP quote whose report data is the mole's address (left-padded to 32 bytes, then 32 zero bytes) and whose measurements equal the
 hashes pinned at deployment. The proof is permanent and anyone can read it.
 
 ## Launch
