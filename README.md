@@ -1,55 +1,145 @@
-# TEMO contracts
+# TEMO
 
-A token on Ethereum whose Uniswap v4 pool fee is set trade by trade by a small neural network that lives on-chain,
-and a seasonal prediction game paid from that fee. The only privileged address is the mole: a wallet born inside a
-sealed TDX enclave. No contract has an owner.
+A token on Ethereum whose swap fee is decided trade by trade by a small neural network that lives on-chain.
+The network is trained by a mole: a wallet born inside a sealed Intel TDX enclave that nobody can open, not even
+the team. Every eight days the pool runs a season, and anyone who buried a capsule with nine predictions gets paid
+from the fee for the answers they got right.
+
+Nothing here has an owner. Every address is an immutable constructor argument, and the only privileged one is the
+mole, whose powers are listed below and end there.
 
 ## Contracts
 
-| Contract | Role |
+| Contract | What it does |
 |---|---|
-| `TemoToken` | ERC-20, fixed supply minted once, keeps a balance history per account (`balanceAt`) |
-| `TemoHook` | the pool hook: takes the fee in ETH, asks the model, writes trade records, pushes season metrics |
-| `TemoModel` | 9-16-1 network in Q8.8; weights in a data contract; the on-chain judge accepts new weights only when they score better on drand-sampled records |
-| `Burrow` | seasons, capsules (commit + ciphertext event), nine questions on a 1-2-5 grid, reveal, claim, roll-over |
-| `MoleProof` | one-shot proof that the mole's wallet was attested by Intel TDX (Automata DCAP verifier) with pinned measurements |
-| `Seeder` | launch initializer: opens the pool, locks the supply as a 0xdEaD position, dev buy, full-range position, burns the rest |
-| `FeeTill` | holds ERC-6909 ETH claims for one immutable recipient; anyone can trigger the payout |
+| `TemoToken` | ERC-20, one billion tokens minted once, burnable. Keeps a balance history per account so a season can read anyone's balance at any past moment. |
+| `TemoHook` | The one permanent hook of the TEMO/ETH pool. Takes the fee in ETH, asks the model for a score, writes one packed record per trade, pushes season metrics to the burrow. |
+| `TemoModel` | A 9-16-1 network in Q8.8 fixed point, weights in a data contract. Judges every proposed weight update on-chain against drand-sampled trades. |
+| `Burrow` | Seasons, capsules, verdicts and payouts. |
+| `MoleProof` | One-shot proof that the mole's wallet was attested by Intel TDX, verified through the Automata DCAP contracts, with the enclave measurements pinned. |
+| `Seeder` | Runs once, inside the launch transaction: opens the pool, locks the supply, performs the launch buy, seeds a second position, burns what is left. |
+| `FeeTill` | Holds ERC-6909 ETH claims for one immutable recipient. Anyone can trigger the payout. |
 
-Fee per swap, in pips: platform 3,000 + dev 9,000 + mole 1,000 (while the mole holds under 0.1 ETH, otherwise dev)
-+ capsule pool 2,000 + 8,000 × score / 10,000. Bounds are constants in the hook.
+## The fee
+
+Every swap pays a fee on its ETH leg. The fee is collected by the hook, never by the token, so it does not touch
+transfers and applies to every trade through the pool.
+
+| Share | Pips | Goes to |
+|---|---|---|
+| Platform | 3,000 (0.30%) | `FeeTill` with the Programmable recipient `0xD88539d3c4C460136a733A3Fd60cf6BF269079da` |
+| Dev | 9,000 (0.90%) | `FeeTill` with the dev recipient |
+| Mole | 1,000 (0.10%) | The mole's wallet, for gas, while it holds under 0.1 ETH; otherwise the dev |
+| Capsule pool | 2,000 to 10,000 (0.20% to 1.00%) | The burrow, as the prize pool of the running season |
+
+The capsule share is the only moving part: `2,000 + 8,000 × score / 10,000`, where the score is the model's
+estimate of how fast this trader will dump. A patient holder pays about 1.5% in total, a predicted flipper up to 2.3%.
+The bounds are constants in the hook. The model is called with a gas-capped `staticcall`; if it fails for any
+reason the neutral score applies and the swap goes through.
+
+## How the model learns
+
+Each trade is written to the hook as one 256-bit record: direction, size relative to liquidity, minutes since the
+wallet's last trade, priority fee, trades in the last 24 hours, holding time, capsule age, hourly volume, whether the
+wallet is new. These are the nine inputs.
+
+The label is what the trader did next. The hook keeps one open position per wallet: buys merge into it, sells take
+from it. A sell within ten minutes of the first buy scores 100, within an hour 80, within six hours 50, within
+twenty hours 25, later 0. The position's final label is the sum of its sells' scores weighted by the fraction of the
+position they sold, and whatever is still held twenty hours after the last buy counts as held. Anyone can close an
+expired position with `settle`.
+
+The mole trains off-chain on these records and proposes new weights. The contract decides whether to adopt them:
+
+1. `commit`: the mole names the new weights. The record count is frozen and a drand quicknet round one minute in
+   the future is fixed. Nothing about that round's randomness is known yet.
+2. `judge`: anyone submits the beacon of that round. The contract verifies the BLS signature through the EIP-2537
+   precompiles, samples 48 finished records with that randomness, scores both the current and the proposed weights
+   on them, and adopts the proposal only if its squared error is at least 3% lower.
+
+Weights cannot be set any other way. Commits are at most one per twenty hours, a commit that is not judged within a
+day expires, and the previous weights stay active throughout.
+
+## Seasons and capsules
+
+A cycle is eight days: a 24-hour prediction window followed by a seven-day season. The capsule share of the fee
+collected during the cycle is the season's prize pool.
+
+During the window any address may bury one capsule: the hash of nine answers plus a salt, with the encrypted answers
+published in an event. A capsule can also ride along with a buy, in the swap's hook data. Tokens are never locked.
+A capsule's weight is the smaller of the owner's balance at the start of the season and at its end, read from the
+token's balance history.
+
+When the season ends, anyone calls `resolve`. The contract settles the nine answers from what the hook reported
+during the season, each on a 1-2-5 grid:
+
+| # | Question |
+|---|---|
+| 1 | Market cap at the close |
+| 2 | Highest market cap of the season |
+| 3 | Lowest market cap of the season |
+| 4 | Change from the opening cap to the close |
+| 5 | Volume in USD |
+| 6 | Number of new wallets |
+| 7 | Which came first, doubling or halving, or neither |
+| 8 | The busiest day |
+| 9 | The size of the prize pool itself |
+
+The pool splits into nine equal shares, one per question. Owners reveal their answers within 24 hours after the
+close, by themselves or through anyone willing to pay the gas; the reveal is checked against the hash and the
+payout always goes to the owner. Each share is divided pro rata by weight among the capsules that hit the exact
+bucket. Claims stay open for 30 days; a share nobody won, or nobody claimed, rolls forward into the running season.
+
+Market cap uses the pool's last trade price, the circulating supply (total minus the dead address) and the Chainlink
+ETH/USD feed; a stale feed is recorded as such in the resolution instead of blocking it. Only the canonical
+TEMO/ETH pool is observed; trades elsewhere do not count toward seasons, labels or fees.
+
+## The mole
+
+The mole is a wallet whose key was generated inside a TDX enclave running a fixed container image. It can:
+
+- deploy the model, the burrow and its own proof before launch, and bind the hook to the burrow once;
+- commit new weights (the contract judges them);
+- publish every capsule's answers after a season, for the leaderboard.
+
+It cannot change any fee, move liquidity, pause anything or touch anyone's tokens. `MoleProof.proveMole` accepts
+one DCAP quote whose report data binds the mole's address and its capsule key, and whose measurements equal the
+hashes pinned at deployment. The proof is permanent and anyone can read it.
+
+## Launch
+
+The whole launch is one transaction through the Programmable launch router. `Seeder.ignite` initializes the pool,
+puts the entire supply into a single-sided position owned by `0x000000000000000000000000000000000000dEaD` through
+the canonical PositionManager, buys with part of the transaction value, seeds a second full-range position with the
+bought tokens and the remaining ETH, also owned by the dead address, and burns whatever is left over. No contract
+holds a withdrawal path for either position.
 
 ## Disclosures
 
-- No owner, admin, pause, mint, blacklist, transfer restriction or upgrade path in any contract. All addresses are
-  immutable constructor arguments; the only privileged address is the mole (commit/judge weights, bind the hook once,
-  publish season data). The mole cannot change fees, move liquidity or stop trading.
-- Platform fee: 3,000 pips (0.30%) of the gross ETH leg on every buy and sell, including the launch buy, accrued as
-  ERC-6909 ETH claims to `FeeTill` with the immutable recipient `0xD88539d3c4C460136a733A3Fd60cf6BF269079da`;
-  anyone can call `collect()`, payment goes only to that recipient.
-- Project fee: 9,000 dev + 1,000 mole + 2,000..10,000 capsule pool, i.e. 12,000..20,000 pips set per trade by the
-  model (16,000 at the neutral score). The model call is gas-capped; on failure the neutral score applies.
-- Liquidity: the launch initializer puts the whole supply into a single-sided position owned by `0x000000000000000000000000000000000000dEaD`
-  through the canonical PositionManager, performs the launch buy with part of the transaction value, seeds a second
-  full-range position with the bought tokens and the remaining ETH, also owned by the dead address, and burns the rest.
-  No contract holds a withdrawal path for either position.
-- External calls: Chainlink ETH/USD (season resolution only), Automata DCAP verifier (one-shot mole proof), drand
-  quicknet verified through the EIP-2537 precompiles (weight judging). None of them is on the swap path except the
-  model `staticcall`, which is bounded and non-reverting.
-- Swaps with empty hook data are standard exact-input or exact-output swaps. Hook data of 96+ bytes is optional and
-  only records a capsule for the trader.
+- No owner, admin, pause, mint, blacklist, transfer restriction or upgrade path in any contract.
+- Platform fee: 3,000 pips of the gross ETH leg on every buy and sell, including the launch buy, accrued as ERC-6909
+  ETH claims to `FeeTill`; anyone can call `collect()`, payment goes only to the immutable recipient.
+- Project fee: 12,000 to 20,000 pips, set per trade by the model as described above; 16,000 at the neutral score.
+- External calls: Chainlink ETH/USD (season resolution only), the Automata DCAP verifier (the one-shot mole proof),
+  drand quicknet through the EIP-2537 precompiles (weight judging). None of them is on the swap path except the
+  bounded, non-reverting model call.
+- Swaps with empty hook data are standard exact-input or exact-output swaps. Hook data of 96 bytes or more is
+  optional and only buries a capsule for the trader.
 
 ## Build and test
 
 ```
 forge build
 forge test --no-match-contract LaunchTest
-ETH_RPC=<mainnet rpc> forge test --match-contract LaunchTest   # full launch and a whole season on a mainnet fork
+ETH_RPC=<mainnet rpc> forge test --match-contract LaunchTest   # launch and a whole season on a mainnet fork
 ```
 
-The drand tests verify real quicknet beacons through the EIP-2537 precompiles.
+The drand tests verify real quicknet beacons through the precompiles. The fork suite launches the pool through the
+seeder, checks the fee split on buys and sells, the hold labels, the mole's gas cap and a complete season from
+capsule to claim.
 
 ## Layout
 
-- `src/` contracts, `src/libraries/` fee math, 1-2-5 grid, record packing, drand verification
+- `src/` the seven contracts and `src/interfaces/ITemo.sol`
+- `src/libraries/` fee math, the 1-2-5 grid, record packing, drand verification
 - `test/` unit tests and the mainnet-fork rehearsal
