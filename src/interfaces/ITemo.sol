@@ -23,11 +23,6 @@ interface IBurrow {
     function hook() external view returns (address);
 }
 
-interface IMoleProof {
-    function proven() external view returns (bool);
-    function mole() external view returns (address);
-}
-
 interface ITemoHook {
     function poolKey() external view returns (PoolKey memory);
     function launchedAt() external view returns (uint40);

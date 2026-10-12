@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-// Website: <fill in before deploy>
-// X:       <fill in before deploy>
+// Website: https://temo.family/
+// X:       https://x.com/temoonchain
 
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {ITemoToken, ITemoHook, IPriceFeed} from "./interfaces/ITemo.sol";
@@ -102,8 +102,7 @@ contract Burrow {
 
     // ================= wiring =================
 
-    /// @notice Bind the pool hook: only the mole, once, only when the hook exists and points back here.
-    /// @notice One-shot binding by the mole after launch: the hook must name this burrow.
+    /// @notice One-shot binding by the mole after launch: the hook must exist and name this burrow.
     function bindHook(ITemoHook hook_) external {
         if (msg.sender != mole) revert NotMole();
         if (hook != address(0)) revert HookAlreadyBound();

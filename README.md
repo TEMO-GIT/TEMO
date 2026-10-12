@@ -14,11 +14,9 @@ mole, whose powers are listed below and end there.
 |---|---|
 | `TemoToken` | ERC-20, one billion tokens minted once, burnable. Keeps a balance history per account so a season can read anyone's balance at any past moment. |
 | `TemoHook` | The one permanent hook of the TEMO/ETH pool. Takes the fee in ETH, asks the model for a score, writes one packed record per trade, pushes season metrics to the burrow. |
-| `TemoModel` | A 9-16-1 network in Q8.8 fixed point, weights in a data contract. Judges every proposed weight update on-chain against drand-sampled trades. |
+| `TemoModel` | A 9-16-1 network in Q8.8 fixed point, weights in a data contract. Judges every proposed weight update on-chain against drand-sampled trades. Also holds the mole's one-shot TDX proof, verified through the Automata DCAP contracts with the enclave measurements pinned. |
 | `Burrow` | Seasons, capsules, verdicts and payouts. |
-| `MoleProof` | One-shot proof that the mole's wallet was attested by Intel TDX, verified through the Automata DCAP contracts, with the enclave measurements pinned. |
 | `Seeder` | Runs once, inside the launch transaction: opens the pool, locks the supply, performs the launch buy, seeds a second position, burns what is left. |
-| `FeeTill` | Holds ERC-6909 ETH claims for one immutable recipient. Anyone can trigger the payout. |
 
 ## The fee
 
@@ -27,8 +25,8 @@ transfers and applies to every trade through the pool.
 
 | Share | Pips | Goes to |
 |---|---|---|
-| Platform | 3,000 (0.30%) | `FeeTill` with the Programmable recipient `0xD88539d3c4C460136a733A3Fd60cf6BF269079da` |
-| Dev | 9,000 (0.90%) | `FeeTill` with the dev recipient |
+| Platform | 3,000 (0.30%) | ETH claims held by the hook for the Programmable recipient `0xD88539d3c4C460136a733A3Fd60cf6BF269079da`; anyone can call `collect(recipient)` |
+| Dev | 9,000 (0.90%) | ETH claims held by the hook for the dev recipient, paid out the same way |
 | Mole | 1,000 (0.10%) | The mole's wallet, for gas, while it holds under 0.1 ETH; otherwise the dev |
 | Capsule pool | 2,000 to 10,000 (0.20% to 1.00%) | The burrow, as the prize pool of the running season |
 
@@ -98,20 +96,21 @@ TEMO/ETH pool is observed; trades elsewhere do not count toward seasons, labels 
 
 The mole is a wallet whose key was generated inside a TDX enclave running a fixed container image. It can:
 
-- deploy the model, the burrow and its own proof before launch, and bind the hook to them once after launch;
-- prove itself once through `MoleProof.proveMole`;
+- bind the hook to the model and the burrow, once, after launch;
+- prove itself once through `TemoModel.proveMole`;
 - commit new weights (the contract judges them);
 - publish every capsule's answers after a season, for the leaderboard.
 
-It cannot change any fee, move liquidity, pause anything or touch anyone's tokens. `MoleProof.proveMole` accepts
+It cannot change any fee, move liquidity, pause anything or touch anyone's tokens. `TemoModel.proveMole` accepts
 one DCAP quote whose report data binds the mole's address and its capsule key, and whose measurements equal the
 hashes pinned at deployment. The proof is permanent and anyone can read it.
 
 ## Launch
 
-The mole deploys the model, the burrow and its proof first. The launch itself is one transaction through the
-Programmable launch router: it deploys the seeder, the two fee tills, the token and the hook, with the mole's
-contracts as the hook's constructor arguments, then `Seeder.ignite` initializes the pool,
+The team deploys the weights, the model and the burrow first, with the mole's address and the enclave measurements
+as constructor arguments; the burrow takes the token address predicted by the launch pack. The launch itself is one
+transaction through the Programmable launch router: it deploys the seeder, the token and the hook, with the model
+and the burrow as the hook's constructor arguments, then `Seeder.ignite` initializes the pool,
 puts the entire supply into a single-sided position owned by `0x000000000000000000000000000000000000dEaD` through
 the canonical PositionManager, buys with part of the transaction value, seeds a second full-range position with the
 bought tokens and the remaining ETH, also owned by the dead address, and burns whatever is left over. No contract
@@ -126,7 +125,8 @@ constants in the hook.
 
 - No owner, admin, pause, mint, blacklist, transfer restriction or upgrade path in any contract.
 - Platform fee: 3,000 pips of the gross ETH leg on every buy and sell, including the launch buy, accrued as ERC-6909
-  ETH claims to `FeeTill`; anyone can call `collect()`, payment goes only to the immutable recipient.
+  ETH claims owned by the hook and booked per recipient; anyone can call `collect(recipient)`, payment goes only to
+  the two immutable recipients.
 - Project fee: 12,000 to 20,000 pips, set per trade by the model as described above; 16,000 at the neutral score.
 - External calls: Chainlink ETH/USD (season resolution only), the Automata DCAP verifier (the one-shot mole proof),
   drand quicknet through the EIP-2537 precompiles (weight judging). None of them is on the swap path except the
@@ -150,6 +150,6 @@ capsule to claim.
 
 ## Layout
 
-- `src/` the seven contracts and `src/interfaces/ITemo.sol`
+- `src/` the five contracts and `src/interfaces/ITemo.sol`
 - `src/libraries/` fee math, the 1-2-5 grid, record packing, drand verification
 - `test/` unit tests and the mainnet-fork rehearsal

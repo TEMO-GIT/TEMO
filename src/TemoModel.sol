@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-// Website: <fill in before deploy>
-// X:       <fill in before deploy>
+// Website: https://temo.family/
+// X:       https://x.com/temoonchain
 
-import {ITemoHook, IMoleProof} from "./interfaces/ITemo.sol";
+import {ITemoHook, IDcapAttestation} from "./interfaces/ITemo.sol";
 import {TradeRecord} from "./libraries/TradeRecord.sol";
 import {DrandBeacon} from "./libraries/DrandBeacon.sol";
 
@@ -15,6 +15,8 @@ import {DrandBeacon} from "./libraries/DrandBeacon.sol";
 ///  - judge: anyone submits that round's beacon; the randomness samples finished records, both models are scored
 ///    on them, and the new weights are adopted only if their squared error is at least 3% lower
 ///  - weights can never be set any other way; there is no owner
+///  - the mole's TDX proof lives here too: `proveMole` verifies one DCAP quote through Automata, pins the enclave
+///    measurements fixed at deployment and binds the report data to the mole's address; `commit` needs `proven`
 contract TemoModel {
     using TradeRecord for uint256;
 
@@ -30,7 +32,9 @@ contract TemoModel {
     uint256 public constant JUDGE_WINDOW = 1 days;
 
     address public immutable mole;
-    IMoleProof public immutable moleProof;
+    IDcapAttestation public immutable verifier;
+    bytes32 public immutable mrTdHash; // keccak256 of the 48-byte MRTD of the mole's enclave
+    bytes32 public immutable rtmrHash; // keccak256 of RTMR0 || RTMR1 || RTMR2 || RTMR3 (192 bytes)
     ITemoHook public hook; // set once by the mole after the hook exists
 
     address public weights;
@@ -48,6 +52,7 @@ contract TemoModel {
 
     error NotMole();
     error NotProven();
+    error ZeroAddress();
     error HookAlreadySet();
     error HookNotSet();
     error BadWeightsLength();
@@ -62,9 +67,12 @@ contract TemoModel {
     event WeightsAdopted(address indexed weights, uint32 version);
     event HookSet(address hook);
 
-    constructor(address mole_, IMoleProof moleProof_, address weights_) {
+    constructor(address mole_, IDcapAttestation verifier_, bytes32 mrTdHash_, bytes32 rtmrHash_, address weights_) {
+        if (mole_ == address(0) || address(verifier_) == address(0)) revert ZeroAddress();
         mole = mole_;
-        moleProof = moleProof_;
+        verifier = verifier_;
+        mrTdHash = mrTdHash_;
+        rtmrHash = rtmrHash_;
         if (weights_.code.length != WEIGHT_BYTES) revert BadWeightsLength();
         weights = weights_;
         version = 1;
@@ -158,12 +166,77 @@ contract TemoModel {
         if (r > 255) r = 255;
     }
 
+    bool public proven;
+    bytes6 public fmspc;
+    uint8 public tcbStatus;
+
+    // serialized verifier output: version(2) bodyType(2) tcbStatus(1) fmspc(6) then the raw TD10 body (584)
+    uint256 private constant OUT_BODY = 11;
+    uint256 private constant TD10_LEN = 584;
+    uint256 private constant TD10_MRTD = 136;
+    uint256 private constant TD10_RTMR0 = 328;
+    uint256 private constant TD10_REPORT_DATA = 520;
+    uint16 private constant TD10_BODY_TYPE = 2;
+    uint8 private constant TCB_MAX_ACCEPTED = 1; // OK or SW_HARDENING_NEEDED
+
+    error AlreadyProven();
+    error VerifierRejected();
+    error WrongBodyType();
+    error TcbNotAccepted(uint8 status);
+    error WrongMeasurement();
+    error WrongReportData();
+
+    event MoleProven(address indexed mole, bytes6 fmspc, uint8 tcbStatus);
+
+
+    // ================= the mole's proof =================
+
+    /// @notice Submit the raw TDX quote. Payable: the verifier may charge a gas-proportional fee and refunds the rest
+    ///         to tx.origin.
+    function proveMole(bytes calldata rawQuote) external payable {
+        if (msg.sender != mole) revert NotMole();
+        if (proven) revert AlreadyProven();
+
+        (bool ok, bytes memory out) = verifier.verifyAndAttestOnChain{value: msg.value}(rawQuote);
+        if (!ok || out.length < OUT_BODY + TD10_LEN) revert VerifierRejected();
+
+        uint16 bodyType = (uint16(uint8(out[2])) << 8) | uint16(uint8(out[3]));
+        if (bodyType != TD10_BODY_TYPE) revert WrongBodyType();
+        uint8 status = uint8(out[4]);
+        if (status > TCB_MAX_ACCEPTED) revert TcbNotAccepted(status);
+
+        if (keccak256(_slice(out, OUT_BODY + TD10_MRTD, 48)) != mrTdHash) revert WrongMeasurement();
+        if (keccak256(_slice(out, OUT_BODY + TD10_RTMR0, 192)) != rtmrHash) revert WrongMeasurement();
+
+        bytes memory reportData = _slice(out, OUT_BODY + TD10_REPORT_DATA, 64);
+        bytes32 expected = bytes32(uint256(uint160(mole))); // report data = the mole's address, left-padded
+        if (bytes32(_slice(reportData, 0, 32)) != expected || bytes32(_slice(reportData, 32, 32)) != bytes32(0)) {
+            revert WrongReportData();
+        }
+
+        bytes6 f;
+        assembly ("memory-safe") {
+            f := mload(add(out, add(0x20, 5)))
+        }
+        fmspc = f;
+        tcbStatus = status;
+        proven = true;
+        emit MoleProven(mole, f, status);
+    }
+
+    function _slice(bytes memory data, uint256 start, uint256 len) private pure returns (bytes memory out) {
+        out = new bytes(len);
+        for (uint256 i = 0; i < len; ++i) {
+            out[i] = data[start + i];
+        }
+    }
+
     // ================= the judge =================
 
     /// @notice The mole names new weights. Freezes the record count and fixes the drand round of judgment.
     function commit(address newWeights) external {
         if (msg.sender != mole) revert NotMole();
-        if (!moleProof.proven()) revert NotProven();
+        if (!proven) revert NotProven();
         if (address(hook) == address(0)) revert HookNotSet();
         if (newWeights.code.length != WEIGHT_BYTES) revert BadWeightsLength();
         if (block.timestamp < uint256(lastCommitAt) + COMMIT_INTERVAL) revert TooSoon();

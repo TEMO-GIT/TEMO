@@ -19,19 +19,10 @@ import {TemoToken} from "../src/TemoToken.sol";
 import {TemoHook} from "../src/TemoHook.sol";
 import {TemoModel, WeightsStore} from "../src/TemoModel.sol";
 import {Burrow} from "../src/Burrow.sol";
-import {FeeTill} from "../src/FeeTill.sol";
 import {Seeder} from "../src/Seeder.sol";
-import {ITemoModel, IMoleProof, ITemoHook, ITemoToken, IPriceFeed} from "../src/interfaces/ITemo.sol";
+import {ITemoModel, ITemoHook, ITemoToken, IPriceFeed} from "../src/interfaces/ITemo.sol";
+import {MockVerifier, QuoteOut} from "./Mocks.sol";
 import {TradeRecord} from "../src/libraries/TradeRecord.sol";
-
-contract MockProof is IMoleProof {
-    bool public proven = true;
-    address public mole;
-
-    constructor(address m) {
-        mole = m;
-    }
-}
 
 contract MockFeed is IPriceFeed {
     int256 public answer = 2500e8;
@@ -72,9 +63,7 @@ contract LaunchTest is Test {
     TemoHook hook;
     TemoModel model;
     Burrow burrow;
-    FeeTill platformTill;
-    FeeTill devTill;
-    MockProof proof;
+    MockVerifier verifier;
     MockFeed feed;
     Seeder seeder;
     PoolSwapTest router;
@@ -91,27 +80,23 @@ contract LaunchTest is Test {
             assertEq(fresh[i].balance, 0, "test address not empty");
         }
 
-        // satellites: the mole deploys them before launch
-        vm.startPrank(mole);
-        proof = new MockProof(mole);
+        // satellites: the team deploys them before launch; the mole is only an address in their constructors
+        verifier = new MockVerifier();
         feed = new MockFeed();
         WeightsFactory wf = new WeightsFactory();
-        model = new TemoModel(mole, proof, wf.make(new bytes(177 * 2)));
-        vm.stopPrank();
+        (bytes memory mrtd, bytes memory rtmrs) = QuoteOut.measurements(keccak256("temo enclave 2026"));
+        model = new TemoModel(mole, verifier, keccak256(mrtd), keccak256(rtmrs), wf.make(new bytes(177 * 2)));
 
         // the launch graph (here: deployed by this test, which also plays the graph deployer)
         seeder = new Seeder(dev, POSM, address(this));
         token = new TemoToken(address(seeder));
-        vm.prank(mole);
         burrow = new Burrow(mole, ITemoToken(address(token)), feed);
-        platformTill = new FeeTill(PM, PLATFORM);
-        devTill = new FeeTill(PM, dev);
 
         uint160 flags = Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
             | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG;
-        bytes memory args = abi.encode(PM, address(token), address(model), address(burrow), address(platformTill), address(devTill), mole);
+        bytes memory args = abi.encode(PM, address(token), address(model), address(burrow), PLATFORM, dev, mole);
         bytes32 salt = _mine(flags, abi.encodePacked(type(TemoHook).creationCode, args));
-        hook = new TemoHook{salt: salt}(PM, address(token), ITemoModel(address(model)), address(burrow), address(platformTill), address(devTill), mole);
+        hook = new TemoHook{salt: salt}(PM, address(token), ITemoModel(address(model)), address(burrow), PLATFORM, dev, mole);
         assertEq(uint160(address(hook)) & Hooks.ALL_HOOK_MASK, flags, "hook address flags");
         key = hook.poolKey();
 
@@ -191,7 +176,7 @@ contract LaunchTest is Test {
         assertEq(token.balanceOf(address(PM)), token.totalSupply(), "pool holds every token left");
         assertLt(token.totalSupply(), token.SUPPLY(), "leftover was burned");
         // the launch buy paid the normal fee: platform 0.30% of the 0.07 ETH buy, the mole got ETH, the burrow got ETH
-        assertEq(PM.balanceOf(address(platformTill), 0), 0.07 ether * 3_000 / 1_000_000, "platform fee on the launch buy");
+        assertEq(hook.owed(PLATFORM), 0.07 ether * 3_000 / 1_000_000, "platform fee on the launch buy");
         assertGt(mole.balance, 0);
         assertGt(address(burrow).balance, 0);
         assertEq(hook.recordCount(), 1);
@@ -201,16 +186,17 @@ contract LaunchTest is Test {
 
     function test_feesSplitOnBuyAndSell() public {
         _ignite();
-        uint256 platformBefore = PM.balanceOf(address(platformTill), 0);
-        uint256 devBefore = PM.balanceOf(address(devTill), 0);
+        uint256 platformBefore = hook.owed(PLATFORM);
+        uint256 devBefore = hook.owed(dev);
         uint256 moleBefore = mole.balance;
         uint256 burrowBefore = address(burrow).balance;
 
         uint256 got = _buy(alice, 1 ether, "");
         assertGt(got, 0);
         // zero weights -> score 5000 -> capsule 0.6% -> total 0.3 + 0.9 + 0.1 + 0.6 = 1.9% of 1 ETH
-        assertEq(PM.balanceOf(address(platformTill), 0) - platformBefore, 0.003 ether, "platform 0.3%");
-        assertEq(PM.balanceOf(address(devTill), 0) - devBefore, 0.009 ether, "dev 0.9%");
+        assertEq(hook.owed(PLATFORM) - platformBefore, 0.003 ether, "platform 0.3%");
+        assertEq(hook.owed(dev) - devBefore, 0.009 ether, "dev 0.9%");
+        assertEq(PM.balanceOf(address(hook), 0), hook.owed(PLATFORM) + hook.owed(dev), "claims back every owed wei");
         assertEq(mole.balance - moleBefore, 0.001 ether, "mole 0.1%");
         assertEq(address(burrow).balance - burrowBefore, 0.006 ether, "capsule 0.6%");
         assertEq(hook.recordCount(), 2);
@@ -229,20 +215,30 @@ contract LaunchTest is Test {
         assertEq(hook.positions(pos) & 0xff, 100);
 
         // tills pay out
-        platformTill.collect();
-        assertEq(PM.balanceOf(address(platformTill), 0), 0);
+        uint256 platformEthBefore = PLATFORM.balance;
+        uint256 owedPlatform = hook.owed(PLATFORM);
+        hook.collect(PLATFORM); // anyone may call; only the recipient is paid
+        assertEq(PLATFORM.balance - platformEthBefore, owedPlatform, "platform paid in ETH");
+        assertEq(hook.owed(PLATFORM), 0);
         uint256 devEthBefore = dev.balance;
-        devTill.collect();
+        uint256 owedDev = hook.owed(dev);
+        hook.collect(dev);
+        assertEq(dev.balance - devEthBefore, owedDev, "dev paid in ETH");
+        assertEq(PM.balanceOf(address(hook), 0), 0, "no claims left");
+        vm.expectRevert(TemoHook.NothingToCollect.selector);
+        hook.collect(dev);
+        vm.expectRevert(TemoHook.UnknownRecipient.selector);
+        hook.collect(bob);
         assertGt(dev.balance, devEthBefore);
     }
 
     function test_moleCapRoutesToDev() public {
         _ignite();
         vm.deal(mole, 0.1 ether);
-        uint256 devBefore = PM.balanceOf(address(devTill), 0);
+        uint256 devBefore = hook.owed(dev);
         _buy(alice, 1 ether, "");
         assertEq(mole.balance, 0.1 ether, "mole at cap gets nothing");
-        assertEq(PM.balanceOf(address(devTill), 0) - devBefore, 0.010 ether, "dev gets 0.9% + 0.1%");
+        assertEq(hook.owed(dev) - devBefore, 0.010 ether, "dev gets 0.9% + 0.1%");
     }
 
     function test_holdLabels() public {

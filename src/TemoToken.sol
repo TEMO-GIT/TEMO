@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-// Website: <fill in before deploy>
-// X:       <fill in before deploy>
+// Website: https://temo.family/
+// X:       https://x.com/temoonchain
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {ERC20Burnable} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
@@ -41,8 +41,8 @@ contract TemoToken is ERC20, ERC20Burnable {
         return string.concat(
             "data:application/json,{\"name\":\"TEMO\",\"symbol\":\"TEMO\",",
             "\"description\":\"A blind mole lives in a sealed enclave and sets the pool fee trade by trade: bots pay more, holders pay less. Every season, capsules predict the week and the fee pool pays the ones who guessed.\",",
-            "\"website\":\"https://<fill in before deploy>\",\"external_url\":\"https://<fill in before deploy>\",",
-            "\"x\":\"https://x.com/<fill in before deploy>\",\"image\":\"https://<fill in before deploy>/token.png\"}"
+            "\"website\":\"https://temo.family/\",\"external_url\":\"https://temo.family/\",",
+            "\"x\":\"https://x.com/temoonchain\",\"image\":\"https://temo.family/token.jpg\"}"
         );
     }
 }

@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-// Website: <fill in before deploy>
-// X:       <fill in before deploy>
+// Website: https://temo.family/
+// X:       https://x.com/temoonchain
 
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -30,7 +31,7 @@ import {ITemoModel, IBurrow} from "./interfaces/ITemo.sol";
 ///  - a wallet is its tx.origin; the hook keeps one open position per wallet to label buys later
 ///  - season metrics are pushed to the burrow; hookData may carry a capsule to bury in the same transaction
 ///  - launch guard: for the first 20 swaps after the launch buy, one buy may take at most 2% of the supply
-contract TemoHook is IHooks {
+contract TemoHook is IHooks, IUnlockCallback {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
     using SafeCast for uint256;
@@ -57,8 +58,8 @@ contract TemoHook is IHooks {
     address public immutable token;
     ITemoModel public immutable model;
     address public immutable burrow;
-    address public immutable platformTill;
-    address public immutable devTill;
+    address public immutable platformRecipient;
+    address public immutable devRecipient;
     address public immutable mole;
 
     // ---------------- state ----------------
@@ -69,6 +70,7 @@ contract TemoHook is IHooks {
     mapping(uint32 id => uint256 packed) public positions; // 0 = open; closed: label | 1 << 8
     uint32 public walletsSeen;
     uint32 public modelFailures;
+    mapping(address recipient => uint256 wei_) public owed; // ETH claims held here for the platform and the dev
 
     // Two storage slots. A wallet has at most one open position: buys merge into it, sells take from it.
     struct Profile {
@@ -105,12 +107,16 @@ contract TemoHook is IHooks {
     error OutOfGasBudget();
     error PartialNativeFill();
     error NotBurrow();
+    error ZeroAddress();
+    error NothingToCollect();
+    error UnknownRecipient();
     error LaunchBuyTooLarge();
 
     event FeeTaken(bool buy, uint256 gross, uint256 platform, uint256 dev, uint256 mole, uint256 capsule, uint16 score);
     event Trade(uint256 indexed index, address indexed origin, uint256 record, uint16 score);
     event PositionClosed(address indexed origin, uint32 indexed id, uint8 label);
     event ModelFailed(uint32 count);
+    event Collected(address indexed recipient, uint256 amount);
 
     modifier onlyPoolManager() {
         if (msg.sender != address(poolManager)) revert NotPoolManager();
@@ -122,16 +128,17 @@ contract TemoHook is IHooks {
         address token_,
         ITemoModel model_,
         address burrow_,
-        address platformTill_,
-        address devTill_,
+        address platformRecipient_,
+        address devRecipient_,
         address mole_
     ) {
+        if (platformRecipient_ == address(0) || devRecipient_ == address(0) || mole_ == address(0)) revert ZeroAddress();
         poolManager = poolManager_;
         token = token_;
         model = model_;
         burrow = burrow_;
-        platformTill = platformTill_;
-        devTill = devTill_;
+        platformRecipient = platformRecipient_;
+        devRecipient = devRecipient_;
         mole = mole_;
         Hooks.validateHookPermissions(IHooks(address(this)), getHookPermissions());
     }
@@ -290,12 +297,12 @@ contract TemoHook is IHooks {
         uint256 dev = FeeCalc.share(gross, fee, DEV_FEE);
         uint256 moleShare = FeeCalc.share(gross, fee, MOLE_FEE);
         uint256 capsule = fee - platform - dev - moleShare;
-        if (platform != 0) poolManager.mint(platformTill, ETH_ID, platform);
+        if (platform != 0) _credit(platformRecipient, platform);
         if (moleShare != 0) {
             if (mole.balance < MOLE_GAS_CAP) poolManager.take(CurrencyLibrary.ADDRESS_ZERO, mole, moleShare);
             else dev += moleShare;
         }
-        if (dev != 0) poolManager.mint(devTill, ETH_ID, dev);
+        if (dev != 0) _credit(devRecipient, dev);
         if (capsule != 0) poolManager.take(CurrencyLibrary.ADDRESS_ZERO, burrow, capsule);
         emit FeeTaken(buy, gross, platform, dev, moleShare, capsule, score);
         pips; // the capsule share is implied by score; kept in the signature for clarity of the event's inputs
@@ -423,6 +430,32 @@ contract TemoHook is IHooks {
         p.soldAmount = 0;
         p.labelAcc = 0;
         p.posId = 0;
+    }
+
+    // ---------------- fee tills ----------------
+
+    /// @dev The platform and dev shares stay inside the PoolManager as ETH claims owned by this hook, so a swap never
+    ///      depends on a recipient accepting ETH. Anyone can trigger the payout; it goes only to the fixed recipient.
+    function _credit(address recipient, uint256 amount) private {
+        poolManager.mint(address(this), ETH_ID, amount);
+        owed[recipient] += amount;
+    }
+
+    /// @notice Pay out everything accrued for `recipient` (the platform or the dev) as ETH.
+    function collect(address recipient) external {
+        if (recipient != platformRecipient && recipient != devRecipient) revert UnknownRecipient();
+        uint256 amount = owed[recipient];
+        if (amount == 0) revert NothingToCollect();
+        owed[recipient] = 0;
+        poolManager.unlock(abi.encode(recipient, amount));
+    }
+
+    function unlockCallback(bytes calldata data) external onlyPoolManager returns (bytes memory) {
+        (address recipient, uint256 amount) = abi.decode(data, (address, uint256));
+        poolManager.burn(address(this), ETH_ID, amount);
+        poolManager.take(CurrencyLibrary.ADDRESS_ZERO, recipient, amount);
+        emit Collected(recipient, amount);
+        return "";
     }
 
     /// @notice Close a wallet's open position once POSITION_TTL passed since its last buy: the rest is labeled "held".
