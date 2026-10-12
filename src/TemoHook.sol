@@ -29,6 +29,7 @@ import {ITemoModel, IBurrow} from "./interfaces/ITemo.sol";
 ///  - every trade is written as one packed record for training and for the on-chain judge
 ///  - a wallet is its tx.origin; the hook keeps one open position per wallet to label buys later
 ///  - season metrics are pushed to the burrow; hookData may carry a capsule to bury in the same transaction
+///  - launch guard: for the first 20 swaps after the launch buy, one buy may take at most 2% of the supply
 contract TemoHook is IHooks {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
@@ -46,6 +47,9 @@ contract TemoHook is IHooks {
     uint256 public constant GAS_RESERVE = 40_000;
     uint256 public constant POSITION_TTL = 20 hours;
     uint16 public constant MID_SCORE = 5_000;
+    // launch guard: the first LAUNCH_GUARD_SWAPS swaps after the launch buy may not buy more than 2% of the supply each
+    uint256 public constant LAUNCH_GUARD_SWAPS = 20;
+    uint256 public constant LAUNCH_MAX_BUY = 20_000_000 ether; // 2% of 1,000,000,000
     uint256 private constant ETH_ID = 0;
 
     // ---------------- wiring ----------------
@@ -101,6 +105,7 @@ contract TemoHook is IHooks {
     error OutOfGasBudget();
     error PartialNativeFill();
     error NotBurrow();
+    error LaunchBuyTooLarge();
 
     event FeeTaken(bool buy, uint256 gross, uint256 platform, uint256 dev, uint256 mole, uint256 capsule, uint16 score);
     event Trade(uint256 indexed index, address indexed origin, uint256 record, uint16 score);
@@ -230,6 +235,8 @@ contract TemoHook is IHooks {
         uint256 ethGross = _nativeSpecified(params) ? _grossOf(params, pips) : (params.amountSpecified < 0 ? ethAmount : ethAmount + uint256(uint128(hookFee)));
 
         uint256 tokenAmount = delta.amount1() < 0 ? uint256(-int256(delta.amount1())) : uint256(int256(delta.amount1()));
+        uint256 count = records.length; // record 0 is the launch buy itself
+        if (buy && count >= 1 && count <= LAUNCH_GUARD_SWAPS && tokenAmount > LAUNCH_MAX_BUY) revert LaunchBuyTooLarge();
         _record(tx.origin, buy, tokenAmount, ethGross, _tload(T_RECORD), score);
 
         uint160 sqrtBefore = uint160(_tload(T_SQRT));

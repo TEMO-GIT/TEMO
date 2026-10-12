@@ -291,6 +291,32 @@ contract LaunchTest is Test {
         assertEq(hook.positions(pos), 1 << 8, "closed 20 h after the last buy");
     }
 
+    function test_launchGuard() public {
+        _ignite(); // record 0: the launch buy, itself above 2%, exempt
+        uint256 limit = hook.LAUNCH_MAX_BUY();
+        assertEq(limit, token.SUPPLY() / 50, "2% of the supply");
+        // at the test's opening price 1 ETH buys ~1e6 tokens: 25 ETH is above 2%, 15 ETH below
+        vm.deal(bob, 1000 ether);
+        vm.prank(bob, bob);
+        vm.expectRevert();
+        router.swap{value: 25 ether}(
+            key,
+            SwapParams({zeroForOne: true, amountSpecified: -25 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1}),
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+            ""
+        );
+        uint256 got = _buy(bob, 15 ether, "");
+        assertLe(got, limit, "a buy under the cap goes through");
+        // sells are never capped
+        _sell(bob, got);
+        // fill the guard window: 20 swaps after the launch buy (2 done above)
+        for (uint256 i = 0; i < 18; ++i) _buy(alice, 0.01 ether, "");
+        assertEq(hook.recordCount(), 21);
+        // the 21st swap after launch is free again
+        uint256 big = _buy(bob, 25 ether, "");
+        assertGt(big, limit, "guard is over");
+    }
+
     function test_settleAfterTtl() public {
         _ignite();
         _buy(bob, 0.5 ether, "");

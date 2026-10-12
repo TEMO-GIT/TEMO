@@ -114,6 +114,10 @@ the canonical PositionManager, buys with part of the transaction value, seeds a 
 bought tokens and the remaining ETH, also owned by the dead address, and burns whatever is left over. No contract
 holds a withdrawal path for either position.
 
+For the first twenty swaps after the launch buy, a single buy may take at most 2% of the supply (20,000,000 tokens);
+a larger buy reverts. Sells are never capped, and from the twenty-first swap on there is no limit. Both numbers are
+constants in the hook.
+
 ## Disclosures
 
 - No owner, admin, pause, mint, blacklist, transfer restriction or upgrade path in any contract.
@@ -123,6 +127,8 @@ holds a withdrawal path for either position.
 - External calls: Chainlink ETH/USD (season resolution only), the Automata DCAP verifier (the one-shot mole proof),
   drand quicknet through the EIP-2537 precompiles (weight judging). None of them is on the swap path except the
   bounded, non-reverting model call.
+- Launch guard: the first twenty swaps after the launch buy may not buy more than 2% of the supply each; nothing
+  else limits buys or sells at any time.
 - Swaps with empty hook data are standard exact-input or exact-output swaps. Hook data of 96 bytes or more is
   optional and only buries a capsule for the trader.
 
