@@ -190,8 +190,8 @@ contract LaunchTest is Test {
         // the whole remaining supply sits in the pool
         assertEq(token.balanceOf(address(PM)), token.totalSupply(), "pool holds every token left");
         assertLt(token.totalSupply(), token.SUPPLY(), "leftover was burned");
-        // the dev buy paid the normal fee: platform claims exist, the mole got ETH, the burrow got ETH
-        assertGt(PM.balanceOf(address(platformTill), 0), 0);
+        // the launch buy paid the normal fee: platform 0.30% of the 0.07 ETH buy, the mole got ETH, the burrow got ETH
+        assertEq(PM.balanceOf(address(platformTill), 0), 0.07 ether * 3_000 / 1_000_000, "platform fee on the launch buy");
         assertGt(mole.balance, 0);
         assertGt(address(burrow).balance, 0);
         assertEq(hook.recordCount(), 1);
