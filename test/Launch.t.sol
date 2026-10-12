@@ -248,14 +248,47 @@ contract LaunchTest is Test {
     function test_holdLabels() public {
         _ignite();
         uint256 got = _buy(bob, 0.5 ether, "");
-        vm.warp(block.timestamp + 3 hours);
-        _sell(bob, got / 2); // half after 3h: trader (50)
-        vm.warp(block.timestamp + 10 hours);
-        _sell(bob, got / 2); // rest after 13h: strategist (25)
-        uint256 buyRec = hook.records(1);
-        uint32 pos = TradeRecord.positionId(buyRec);
-        // weighted: 50 * 0.5 + 25 * 0.5 = 37
-        assertEq(hook.positions(pos) & 0xff, 37);
+        uint32 pos = TradeRecord.positionId(hook.records(1));
+        vm.warp(block.timestamp + 5 minutes);
+        _sell(bob, got / 2); // 50% within 10 minutes: 100
+        vm.warp(block.timestamp + 25 minutes);
+        _sell(bob, got / 4); // 25% at 30 minutes: 80
+        assertEq(hook.positions(pos), 0, "still open");
+        vm.warp(block.timestamp + 20 hours);
+        hook.settle(bob); // the last 25% was held: 0
+        // fractions relative to everything bought: 0.5 * 100 + 0.25 * 80 + 0.25 * 0 = 70
+        assertEq(hook.positions(pos) & 0xff, 70);
+    }
+
+    function test_holdLabelsRescaleOnMerge() public {
+        _ignite();
+        uint256 got = _buy(bob, 0.5 ether, "");
+        uint32 pos = TradeRecord.positionId(hook.records(1));
+        vm.warp(block.timestamp + 5 minutes);
+        _sell(bob, got / 2); // 50 of 100 at once: 100
+        vm.warp(block.timestamp + 1 hours);
+        uint256 more = _buy(bob, 0.5 ether, ""); // position grows to ~150 held + 50 sold
+        assertEq(TradeRecord.positionId(hook.records(3)), pos, "second buy merged into the same position");
+        vm.warp(block.timestamp + 20 hours);
+        hook.settle(bob);
+        // sold 50 out of (100 + more) bought; the rest held. more ~ 100 (price barely moved), so ~25
+        uint256 expected = 100 * (got / 2) / (got + more);
+        uint256 label = hook.positions(pos) & 0xff;
+        assertApproxEqAbs(label, expected, 1, "label = 100 * sold / bought");
+    }
+
+    function test_ttlCountsFromLastBuy() public {
+        _ignite();
+        _buy(bob, 0.5 ether, "");
+        uint32 pos = TradeRecord.positionId(hook.records(1));
+        vm.warp(block.timestamp + 19 hours);
+        _buy(bob, 0.1 ether, ""); // top-up one hour before the old TTL
+        vm.warp(block.timestamp + 2 hours); // 21 h after the first buy, 2 h after the second
+        hook.settle(bob);
+        assertEq(hook.positions(pos), 0, "second buy not observed for 20 h yet");
+        vm.warp(block.timestamp + 18 hours);
+        hook.settle(bob);
+        assertEq(hook.positions(pos), 1 << 8, "closed 20 h after the last buy");
     }
 
     function test_settleAfterTtl() public {

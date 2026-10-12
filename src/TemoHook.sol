@@ -66,17 +66,19 @@ contract TemoHook is IHooks {
     uint32 public walletsSeen;
     uint32 public modelFailures;
 
+    // Two storage slots. A wallet has at most one open position: buys merge into it, sells take from it.
     struct Profile {
         uint40 firstSeen;
         uint40 lastTrade;
         uint16 trades24h;
         uint40 windowStart;
         uint32 posId;
-        uint16 soldFracBps;
-        uint16 labelAccBps;
-        uint128 openAmount;
-        uint40 openTs;
+        uint40 openTs; // first buy of the position: base of the hold time
+        uint40 lastBuyTs; // last buy: base of POSITION_TTL, so every buy is observed for the full TTL
+        uint96 openAmount; // tokens still held in the position
+        uint96 soldAmount; // tokens sold out of it
         uint40 capsuleTs;
+        uint24 labelAcc; // sum(label_i * fractionBps_i), fractions relative to openAmount + soldAmount; max 1e6
     }
 
     mapping(address origin => Profile) public profiles;
@@ -354,18 +356,23 @@ contract TemoHook is IHooks {
         p.lastTrade = uint40(now_);
 
         // an expired open position closes first, with what has been accounted so far
-        if (p.openTs != 0 && now_ >= uint256(p.openTs) + POSITION_TTL) _close(origin, p);
+        if (p.openTs != 0 && now_ >= uint256(p.lastBuyTs) + POSITION_TTL) _close(origin, p);
 
         if (buy) {
             if (p.openTs == 0) {
                 p.posId = ++positionCount;
                 p.openTs = uint40(now_);
                 p.openAmount = 0;
-                p.soldFracBps = 0;
-                p.labelAccBps = 0;
+                p.soldAmount = 0;
+                p.labelAcc = 0;
             }
+            uint256 total = uint256(p.openAmount) + p.soldAmount;
             uint256 merged = uint256(p.openAmount) + tokenAmount;
-            p.openAmount = merged > type(uint128).max ? type(uint128).max : uint128(merged);
+            if (merged > type(uint96).max) merged = type(uint96).max;
+            // fractions stay relative to the whole position: rescale what was accumulated so far
+            if (total != 0) p.labelAcc = uint24(uint256(p.labelAcc) * total / (merged + p.soldAmount));
+            p.openAmount = uint96(merged);
+            p.lastBuyTs = uint40(now_);
             rec |= uint256(p.posId) << 132; // label will live in positions[posId]
         } else {
             uint256 since = p.openTs != 0 ? p.openTs : p.firstSeen;
@@ -373,12 +380,12 @@ contract TemoHook is IHooks {
             rec |= uint256(label) << 123;
             rec |= uint256(1) << 131;
             if (p.openTs != 0 && p.openAmount != 0) {
-                uint256 frac = tokenAmount >= p.openAmount ? 10_000 : tokenAmount * 10_000 / p.openAmount;
-                uint256 remaining = 10_000 - p.soldFracBps;
-                if (frac > remaining) frac = remaining;
-                p.labelAccBps = uint16(uint256(p.labelAccBps) + uint256(label) * frac / 100); // label% * frac / 1e4 * 1e4/100
-                p.soldFracBps = uint16(uint256(p.soldFracBps) + frac);
-                p.openAmount = tokenAmount >= p.openAmount ? 0 : p.openAmount - uint128(tokenAmount);
+                uint256 sold = tokenAmount >= p.openAmount ? p.openAmount : tokenAmount;
+                uint256 total = uint256(p.openAmount) + p.soldAmount;
+                uint256 frac = sold * 10_000 / total; // bps of the whole position
+                p.labelAcc = uint24(uint256(p.labelAcc) + uint256(label) * frac); // label% * bps
+                p.soldAmount = uint96(uint256(p.soldAmount) + sold);
+                p.openAmount = uint96(uint256(p.openAmount) - sold);
                 if (p.openAmount == 0) _close(origin, p);
             }
         }
@@ -398,22 +405,23 @@ contract TemoHook is IHooks {
         hour = h;
     }
 
-    /// @dev Final label of a position = sum(label_i * fraction_i); the unsold remainder counts as held (0).
+    /// @dev Final label of a position = sum(label_i * fraction_i) over everything bought into it; the unsold remainder counts as held (0).
     function _close(address origin, Profile memory p) private {
-        uint8 label = uint8(uint256(p.labelAccBps) / 100);
+        uint8 label = uint8((uint256(p.labelAcc) + 5_000) / 10_000); // rounded once, to the nearest
         positions[p.posId] = uint256(label) | (1 << 8);
         emit PositionClosed(origin, p.posId, label);
         p.openTs = 0;
+        p.lastBuyTs = 0;
         p.openAmount = 0;
-        p.soldFracBps = 0;
-        p.labelAccBps = 0;
+        p.soldAmount = 0;
+        p.labelAcc = 0;
         p.posId = 0;
     }
 
-    /// @notice Close a wallet's open position once it is older than POSITION_TTL: the buy is labeled "held".
+    /// @notice Close a wallet's open position once POSITION_TTL passed since its last buy: the rest is labeled "held".
     function settle(address origin) external {
         Profile memory p = profiles[origin];
-        if (p.openTs == 0 || block.timestamp < uint256(p.openTs) + POSITION_TTL) return;
+        if (p.openTs == 0 || block.timestamp < uint256(p.lastBuyTs) + POSITION_TTL) return;
         _close(origin, p);
         profiles[origin] = p;
     }
@@ -421,7 +429,7 @@ contract TemoHook is IHooks {
     function settleMany(address[] calldata origins) external {
         for (uint256 i = 0; i < origins.length; ++i) {
             Profile memory p = profiles[origins[i]];
-            if (p.openTs == 0 || block.timestamp < uint256(p.openTs) + POSITION_TTL) continue;
+            if (p.openTs == 0 || block.timestamp < uint256(p.lastBuyTs) + POSITION_TTL) continue;
             _close(origins[i], p);
             profiles[origins[i]] = p;
         }
