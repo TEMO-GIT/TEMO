@@ -19,6 +19,26 @@ sealed TDX enclave. No contract has an owner.
 Fee per swap, in pips: platform 3,000 + dev 9,000 + mole 1,000 (while the mole holds under 0.1 ETH, otherwise dev)
 + capsule pool 2,000 + 8,000 × score / 10,000. Bounds are constants in the hook.
 
+## Disclosures
+
+- No owner, admin, pause, mint, blacklist, transfer restriction or upgrade path in any contract. All addresses are
+  immutable constructor arguments; the only privileged address is the mole (commit/judge weights, bind the hook once,
+  publish season data). The mole cannot change fees, move liquidity or stop trading.
+- Platform fee: 3,000 pips (0.30%) of the gross ETH leg on every buy and sell, including the launch buy, accrued as
+  ERC-6909 ETH claims to `FeeTill` with the immutable recipient `0xD88539d3c4C460136a733A3Fd60cf6BF269079da`;
+  anyone can call `collect()`, payment goes only to that recipient.
+- Project fee: 9,000 dev + 1,000 mole + 2,000..10,000 capsule pool, i.e. 12,000..20,000 pips set per trade by the
+  model (16,000 at the neutral score). The model call is gas-capped; on failure the neutral score applies.
+- Liquidity: the launch initializer puts the whole supply into a single-sided position owned by `0x000000000000000000000000000000000000dEaD`
+  through the canonical PositionManager, performs the launch buy with part of the transaction value, seeds a second
+  full-range position with the bought tokens and the remaining ETH, also owned by the dead address, and burns the rest.
+  No contract holds a withdrawal path for either position.
+- External calls: Chainlink ETH/USD (season resolution only), Automata DCAP verifier (one-shot mole proof), drand
+  quicknet verified through the EIP-2537 precompiles (weight judging). None of them is on the swap path except the
+  model `staticcall`, which is bounded and non-reverting.
+- Swaps with empty hook data are standard exact-input or exact-output swaps. Hook data of 96+ bytes is optional and
+  only records a capsule for the trader.
+
 ## Build and test
 
 ```
