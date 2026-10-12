@@ -9,8 +9,8 @@ import {ITemoToken, ITemoHook, IPriceFeed} from "./interfaces/ITemo.sol";
 import {Grid125} from "./libraries/Grid125.sol";
 
 /// @title Burrow
-/// @notice Seasons, capsules, verdicts, payouts. No owner. The mole may only publish answers; everything else is
-///         open to anyone. The hook is bound once by the launch graph.
+/// @notice Seasons, capsules, verdicts, payouts. No owner. The mole may only bind the hook (once) and publish
+///         answers; everything else is open to anyone.
 ///  - a capsule is a hash of 9 answers + salt; the ciphertext goes to an event only
 ///  - tokens are never locked: capsule weight = min(balance at season start, balance at season end)
 ///  - the season pool is the capsule share of the hook fee collected during the cycle
@@ -103,8 +103,9 @@ contract Burrow {
     // ================= wiring =================
 
     /// @notice Bind the pool hook: only the mole, once, only when the hook exists and points back here.
-    /// @notice One-shot binding, run by the launch graph after the pool is open: the hook must name this burrow.
+    /// @notice One-shot binding by the mole after launch: the hook must name this burrow.
     function bindHook(ITemoHook hook_) external {
+        if (msg.sender != mole) revert NotMole();
         if (hook != address(0)) revert HookAlreadyBound();
         if (address(hook_).code.length == 0 || hook_.burrow() != address(this)) revert WrongHook();
         uint40 t = hook_.launchedAt();

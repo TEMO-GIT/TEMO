@@ -17,7 +17,7 @@ import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 
 import {TemoToken} from "../src/TemoToken.sol";
 import {TemoHook} from "../src/TemoHook.sol";
-import {TemoModel} from "../src/TemoModel.sol";
+import {TemoModel, WeightsStore} from "../src/TemoModel.sol";
 import {Burrow} from "../src/Burrow.sol";
 import {FeeTill} from "../src/FeeTill.sol";
 import {Seeder} from "../src/Seeder.sol";
@@ -47,6 +47,12 @@ contract MockFeed is IPriceFeed {
 
 /// @notice Full launch on a mainnet fork: real PoolManager and PositionManager, our contracts, the dev buy, trades
 ///         through the hook, a whole season with capsules. Run with --fork-url.
+contract WeightsFactory {
+    function make(bytes memory data) external returns (address) {
+        return WeightsStore.create(data);
+    }
+}
+
 contract LaunchTest is Test {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
@@ -85,12 +91,18 @@ contract LaunchTest is Test {
             assertEq(fresh[i].balance, 0, "test address not empty");
         }
 
-        // the launch graph (here: deployed by this test, which also plays the graph deployer); the mole is only an address
+        // satellites: the mole deploys them before launch
+        vm.startPrank(mole);
         proof = new MockProof(mole);
         feed = new MockFeed();
-        model = new TemoModel(mole, proof, new bytes(177 * 2));
+        WeightsFactory wf = new WeightsFactory();
+        model = new TemoModel(mole, proof, wf.make(new bytes(177 * 2)));
+        vm.stopPrank();
+
+        // the launch graph (here: deployed by this test, which also plays the graph deployer)
         seeder = new Seeder(dev, POSM, address(this));
         token = new TemoToken(address(seeder));
+        vm.prank(mole);
         burrow = new Burrow(mole, ITemoToken(address(token)), feed);
         platformTill = new FeeTill(PM, PLATFORM);
         devTill = new FeeTill(PM, dev);
@@ -129,9 +141,11 @@ contract LaunchTest is Test {
             buyEth: 0.07 ether
         });
         mainId = seeder.ignite{value: 0.1 ether}(address(token), address(hook), p);
-        // the graph's initializers bind the hook now that the pool is open
+        // the mole binds the hook now that it exists
+        vm.startPrank(mole);
         burrow.bindHook(ITemoHook(address(hook)));
         model.setHook(ITemoHook(address(hook)));
+        vm.stopPrank();
     }
 
     function _buy(address who, uint256 ethIn, bytes memory hookData) internal returns (uint256 got) {

@@ -66,8 +66,9 @@ contract ModelTest is Test {
         proof = new MockProof(mole);
         hook = new MockHook();
         factory = new WeightsFactory();
-        model = new TemoModel(mole, proof, _zeroWeights());
+        model = new TemoModel(mole, proof, factory.make(_zeroWeights()));
         hook.setModel(address(model));
+        vm.prank(mole);
         model.setHook(ITemoHook(address(hook)));
     }
 

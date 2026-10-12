@@ -62,20 +62,19 @@ contract TemoModel {
     event WeightsAdopted(address indexed weights, uint32 version);
     event HookSet(address hook);
 
-    /// @param weights_ the v0 weights (WEIGHT_BYTES of int16), stored in a data contract created here
-    constructor(address mole_, IMoleProof moleProof_, bytes memory weights_) {
+    constructor(address mole_, IMoleProof moleProof_, address weights_) {
         mole = mole_;
         moleProof = moleProof_;
-        if (weights_.length != WEIGHT_BYTES) revert BadWeightsLength();
-        address store = WeightsStore.create(weights_);
-        weights = store;
+        if (weights_.code.length != WEIGHT_BYTES) revert BadWeightsLength();
+        weights = weights_;
         version = 1;
-        emit WeightsAdopted(store, 1);
+        emit WeightsAdopted(weights_, 1);
     }
 
     /// @notice One-shot wiring: only the mole, only once, only when the hook exists and points at this model.
-    /// @notice One-shot binding, run by the launch graph: the hook must name this model.
+    /// @notice One-shot binding by the mole after launch: the hook must name this model.
     function setHook(ITemoHook hook_) external {
+        if (msg.sender != mole) revert NotMole();
         if (address(hook) != address(0)) revert HookAlreadySet();
         if (address(hook_).code.length == 0 || hook_.model() != address(this)) revert HookNotSet();
         hook = hook_;
