@@ -34,11 +34,6 @@ interface ITemoHook {
     function noteCapsule(address owner, uint40 timestamp) external;
 }
 
-/// @notice Automata DCAP attestation entrypoint (Ethereum mainnet: 0x0387aB2eDAB2A138a43437e36AF63689Bb7030f4).
-interface IDcapAttestation {
-    function verifyAndAttestOnChain(bytes calldata rawQuote) external payable returns (bool success, bytes memory output);
-}
-
 interface IPriceFeed {
     function latestRoundData()
         external

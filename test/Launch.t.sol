@@ -21,7 +21,6 @@ import {TemoModel} from "../src/TemoModel.sol";
 import {Burrow} from "../src/Burrow.sol";
 import {Seeder} from "../src/Seeder.sol";
 import {ITemoModel, ITemoHook, ITemoToken, IPriceFeed} from "../src/interfaces/ITemo.sol";
-import {MockVerifier, QuoteOut} from "./Mocks.sol";
 import {TradeRecord} from "../src/libraries/TradeRecord.sol";
 
 contract MockFeed is IPriceFeed {
@@ -57,7 +56,6 @@ contract LaunchTest is Test {
     TemoHook hook;
     TemoModel model;
     Burrow burrow;
-    MockVerifier verifier;
     MockFeed feed;
     Seeder seeder;
     PoolSwapTest router;
@@ -76,10 +74,8 @@ contract LaunchTest is Test {
 
         // the launch graph: all five contracts, deployed by this test, which plays the graph factory;
         // the mole is only an address in the constructors
-        verifier = new MockVerifier();
         feed = new MockFeed();
-        (bytes memory mrtd, bytes memory rtmrs) = QuoteOut.measurements(keccak256("temo enclave 2026"));
-        model = new TemoModel(mole, verifier, keccak256(mrtd), keccak256(rtmrs), new bytes(177 * 2));
+        model = new TemoModel(mole, new bytes(177 * 2));
         seeder = new Seeder(dev, POSM, address(this));
         token = new TemoToken(address(seeder));
         burrow = new Burrow(mole, ITemoToken(address(token)), feed);
@@ -117,15 +113,16 @@ contract LaunchTest is Test {
             minTokensOut: 1,
             buyEth: 0.07 ether
         });
+        // the graph's initializers, in the order the launch pack runs them: model.setHook, seeder.ignite, burrow.bindHook
+        model.setHook(ITemoHook(address(hook)));
         mainId = seeder.ignite{value: 0.1 ether}(address(token), address(hook), p);
-        // the graph's initializers bind the hook in the same transaction; nobody else can
+        burrow.bindHook(ITemoHook(address(hook)));
+        // nobody else can bind, and nobody can bind twice
         vm.prank(mole);
         vm.expectRevert(Burrow.NotDeployer.selector);
         burrow.bindHook(ITemoHook(address(hook)));
         vm.prank(mole);
         vm.expectRevert(TemoModel.NotDeployer.selector);
-        model.setHook(ITemoHook(address(hook)));
-        burrow.bindHook(ITemoHook(address(hook)));
         model.setHook(ITemoHook(address(hook)));
         vm.expectRevert(Burrow.HookAlreadyBound.selector);
         burrow.bindHook(ITemoHook(address(hook)));

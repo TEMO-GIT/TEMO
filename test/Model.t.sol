@@ -6,7 +6,6 @@ import {TemoModel, WeightsStore} from "../src/TemoModel.sol";
 import {TradeRecord} from "../src/libraries/TradeRecord.sol";
 import {DrandBeacon} from "../src/libraries/DrandBeacon.sol";
 import {ITemoHook} from "../src/interfaces/ITemo.sol";
-import {MockVerifier, QuoteOut} from "./Mocks.sol";
 
 /// @dev Stands in for the hook: a record list and closed positions.
 contract MockHook {
@@ -41,9 +40,6 @@ contract WeightsFactory {
 
 contract ModelTest is Test {
     address mole = address(0xA11CE);
-    MockVerifier verifier;
-    bytes mrtd;
-    bytes rtmrs;
     MockHook hook;
     WeightsFactory factory;
     TemoModel model;
@@ -53,11 +49,9 @@ contract ModelTest is Test {
         hex"0000000000000000000000000000000011f92e4521ef54f047b64b85fa98db2d46f0f44add1f60b93f8a0dbddd63b34f238657c2d93aed18b90bddd60a01b6d2";
 
     function setUp() public {
-        verifier = new MockVerifier();
-        (mrtd, rtmrs) = QuoteOut.measurements(keccak256("temo enclave test"));
         hook = new MockHook();
         factory = new WeightsFactory();
-        model = new TemoModel(mole, verifier, keccak256(mrtd), keccak256(rtmrs), _zeroWeights());
+        model = new TemoModel(mole, _zeroWeights());
         hook.setModel(address(model));
         vm.prank(mole);
         vm.expectRevert(TemoModel.NotDeployer.selector);
@@ -65,50 +59,13 @@ contract ModelTest is Test {
         model.setHook(ITemoHook(address(hook))); // this test deployed the model, as the launch graph would
     }
 
-    /// @dev A valid quote: right body type, accepted TCB, pinned measurements, report data = the mole's address.
-    function _prove() internal {
-        verifier.set(QuoteOut.build(2, 0, mrtd, rtmrs, QuoteOut.reportFor(mole)), true);
-        vm.prank(mole);
-        model.proveMole("quote");
-        assertTrue(model.proven());
-    }
-
-    function test_proveMoleRejectsWrongMeasurement() public {
-        (bytes memory otherMrtd,) = QuoteOut.measurements(keccak256("another image"));
-        verifier.set(QuoteOut.build(2, 0, otherMrtd, rtmrs, QuoteOut.reportFor(mole)), true);
-        vm.prank(mole);
-        vm.expectRevert(TemoModel.WrongMeasurement.selector);
-        model.proveMole("quote");
-    }
-
-    function test_proveMoleRejectsWrongReportData() public {
-        verifier.set(QuoteOut.build(2, 0, mrtd, rtmrs, QuoteOut.reportFor(address(0xBEEF))), true);
-        vm.prank(mole);
-        vm.expectRevert(TemoModel.WrongReportData.selector);
-        model.proveMole("quote");
-    }
-
-    function test_proveMoleRejectsBadTcbAndBodyAndVerifier() public {
-        verifier.set(QuoteOut.build(2, 2, mrtd, rtmrs, QuoteOut.reportFor(mole)), true);
-        vm.prank(mole);
-        vm.expectRevert(abi.encodeWithSelector(TemoModel.TcbNotAccepted.selector, uint8(2)));
-        model.proveMole("quote");
-        verifier.set(QuoteOut.build(1, 0, mrtd, rtmrs, QuoteOut.reportFor(mole)), true);
-        vm.prank(mole);
-        vm.expectRevert(TemoModel.WrongBodyType.selector);
-        model.proveMole("quote");
-        verifier.set(QuoteOut.build(2, 0, mrtd, rtmrs, QuoteOut.reportFor(mole)), false);
-        vm.prank(mole);
-        vm.expectRevert(TemoModel.VerifierRejected.selector);
-        model.proveMole("quote");
-        // only the mole, only once
-        verifier.set(QuoteOut.build(2, 0, mrtd, rtmrs, QuoteOut.reportFor(mole)), true);
-        vm.expectRevert(TemoModel.NotMole.selector);
-        model.proveMole("quote");
-        _prove();
-        vm.prank(mole);
-        vm.expectRevert(TemoModel.AlreadyProven.selector);
-        model.proveMole("quote");
+    function test_constructorChecks() public {
+        vm.expectRevert(TemoModel.BadWeightsLength.selector);
+        new TemoModel(mole, new bytes(353));
+        vm.expectRevert(TemoModel.ZeroAddress.selector);
+        new TemoModel(address(0), _zeroWeights());
+        assertEq(model.weights().code.length, 354, "initial store holds the v0 bytes");
+        assertEq(model.mole(), mole);
     }
 
     function _zeroWeights() internal pure returns (bytes memory) {
@@ -195,17 +152,7 @@ contract ModelTest is Test {
         vm.warp(DrandBeacon.roundTime(1000) - 60);
     }
 
-    function test_commitRequiresProof() public {
-        _fillRecords();
-        _warpToRound1000Commit();
-        address w = factory.make(_biasWeights(-1024));
-        vm.prank(mole);
-        vm.expectRevert(TemoModel.NotProven.selector);
-        model.commit(w);
-    }
-
     function test_onlyMoleCommits() public {
-        _prove();
         _fillRecords();
         address w = factory.make(_biasWeights(-1024));
         vm.expectRevert(TemoModel.NotMole.selector);
@@ -213,7 +160,6 @@ contract ModelTest is Test {
     }
 
     function test_judgeAdoptsBetterWeights() public {
-        _prove();
         _fillRecords();
         _warpToRound1000Commit();
         address better = factory.make(_biasWeights(-1024)); // scores 0 on everything; labels are 0 -> SSE 0
@@ -239,7 +185,6 @@ contract ModelTest is Test {
     }
 
     function test_judgeRejectsWorseWeights() public {
-        _prove();
         _fillRecords();
         _warpToRound1000Commit();
         address worse = factory.make(_biasWeights(1024)); // scores 10000 on everything
@@ -253,7 +198,6 @@ contract ModelTest is Test {
     }
 
     function test_judgeRejectsTinyImprovement() public {
-        _prove();
         _fillRecords();
         _warpToRound1000Commit();
         // old = 5000 everywhere (SSE = n * 25e6); new = 4950 -> SSE = n * 24.5e6 = 98% -> not 3% better
@@ -266,7 +210,6 @@ contract ModelTest is Test {
     }
 
     function test_commitInterval() public {
-        _prove();
         _fillRecords();
         _warpToRound1000Commit();
         address w = factory.make(_biasWeights(-1024));
@@ -278,7 +221,6 @@ contract ModelTest is Test {
     }
 
     function test_judgeExpires() public {
-        _prove();
         _fillRecords();
         _warpToRound1000Commit();
         address w = factory.make(_biasWeights(-1024));

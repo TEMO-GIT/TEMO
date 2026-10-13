@@ -14,7 +14,7 @@ mole, whose powers are listed below and end there.
 |---|---|
 | `TemoToken` | ERC-20, one billion tokens minted once, burnable. Keeps a balance history per account so a season can read anyone's balance at any past moment. |
 | `TemoHook` | The one permanent hook of the TEMO/ETH pool. Takes the fee in ETH, asks the model for a score, writes one packed record per trade, pushes season metrics to the burrow. |
-| `TemoModel` | A 9-16-1 network in Q8.8 fixed point, weights in a data contract. Judges every proposed weight update on-chain against drand-sampled trades. Also holds the mole's one-shot TDX proof, verified through the Automata DCAP contracts with the enclave measurements pinned. |
+| `TemoModel` | A 9-16-1 network in Q8.8 fixed point, weights in a data contract. Judges every proposed weight update on-chain against drand-sampled trades. Only the mole's fixed address may propose an update. |
 | `Burrow` | Seasons, capsules, verdicts and payouts. |
 | `Seeder` | Runs once, inside the launch transaction: opens the pool, locks the supply, performs the launch buy, seeds a second position, burns what is left. |
 
@@ -94,20 +94,21 @@ TEMO/ETH pool is observed; trades elsewhere do not count toward seasons, labels 
 
 ## The mole
 
-The mole is a wallet whose key was generated inside a TDX enclave running a fixed container image. It can:
+The mole is a wallet whose key was generated inside a TDX enclave running a published container image. It can:
 
-- prove itself once through `TemoModel.proveMole`;
 - commit new weights (the contract judges them);
 - publish every capsule's answers after a season, for the leaderboard.
 
-It cannot change any fee, move liquidity, pause anything or touch anyone's tokens. `TemoModel.proveMole` accepts
-one DCAP quote whose report data is the mole's address (left-padded to 32 bytes, then 32 zero bytes) and whose measurements equal the
-hashes pinned at deployment. The proof is permanent and anyone can read it.
+It cannot change any fee, move liquidity, pause anything or touch anyone's tokens. The contracts know the mole only
+as a fixed address. They do not verify the enclave: the proof that the mole's key lives in a TEE running the published
+release (a TDX quote bound to the address, checked against the public release manifest) is verified off-chain, on the
+project site or with the published script. On-chain, the mole's power is bounded by the model's own judgment: a weight
+update is adopted only if it scores better on drand-sampled past trades.
 
 ## Launch
 
 The launch is one transaction through the Programmable launch router. It deploys all five contracts, with the
-mole's address, the enclave measurements and the v0 weights as constructor arguments, then runs their initializers
+mole's address and the v0 weights as constructor arguments, then runs their initializers
 in order: `TemoModel.setHook` binds the hook, `Seeder.ignite` initializes the pool,
 puts the entire supply into a single-sided position owned by `0x000000000000000000000000000000000000dEaD` through
 the canonical PositionManager, buys with part of the transaction value, seeds a second full-range position with the
@@ -127,8 +128,7 @@ constants in the hook.
   ETH claims owned by the hook and booked per recipient; anyone can call `collect(recipient)`, payment goes only to
   the two immutable recipients.
 - Project fee: 12,000 to 20,000 pips, set per trade by the model as described above; 16,000 at the neutral score.
-- External calls: Chainlink ETH/USD (season resolution only), the Automata DCAP verifier (the one-shot mole proof),
-  drand quicknet through the EIP-2537 precompiles (weight judging). None of them is on the swap path except the
+- External calls: Chainlink ETH/USD (season resolution only), drand quicknet through the EIP-2537 precompiles (weight judging). None of them is on the swap path except the
   bounded, non-reverting model call.
 - Launch guard: the first twenty swaps after the launch buy may not buy more than 2% of the supply each; nothing
   else limits buys or sells at any time.
