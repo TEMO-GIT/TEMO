@@ -20,7 +20,7 @@ contract TemoToken is ERC20, ERC20Burnable {
 
     mapping(address account => Checkpoints.Trace208) private _history;
 
-    constructor(address recipient) ERC20("TEMO", "TEMO") {
+    constructor(address recipient) ERC20("Temo", "Temo") {
         _mint(recipient, SUPPLY);
     }
 
@@ -39,8 +39,8 @@ contract TemoToken is ERC20, ERC20Burnable {
     /// @notice Inline metadata read by launch platforms and explorers; lives in bytecode.
     function tokenURI() external pure returns (string memory) {
         return string.concat(
-            "data:application/json,{\"name\":\"TEMO\",\"symbol\":\"TEMO\",",
-            "\"description\":\"A blind mole lives in a sealed enclave and sets the pool fee trade by trade: bots pay more, holders pay less. Every season, capsules predict the week and the fee pool pays the ones who guessed.\",",
+            "data:application/json,{\"name\":\"Temo\",\"symbol\":\"Temo\",",
+            "\"description\":\"A blind mole who never saw his own key born in a TEE. No seed phrase. Nobody to peek\",",
             "\"website\":\"https://temo.family/\",\"external_url\":\"https://temo.family/\",",
             "\"x\":\"https://x.com/temoonchain\",\"image\":\"https://temo.family/token.jpg\"}"
         );
