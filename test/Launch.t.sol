@@ -348,6 +348,9 @@ contract LaunchTest is Test {
         uint256 aliceTokens = _buy(alice, 2 ether, abi.encode(keccak256(abi.encode(alice, uint32(1), aliceAnswers, aliceSalt)), bytes("ct")));
         uint256 bobTokens = _buy(bob, 1 ether, "");
         vm.prank(bob);
+        vm.expectRevert(Burrow.BadCommit.selector);
+        burrow.bury(bytes32(0), "ct2");
+        vm.prank(bob);
         burrow.bury(keccak256(abi.encode(bob, uint32(1), bobAnswers, bobSalt)), "ct2");
         assertEq(burrow.capsuleCount(1), 2);
         (,,,,,,,,,, uint256 poolAfterWindow,) = burrow.seasonInfo(1);
@@ -399,17 +402,25 @@ contract LaunchTest is Test {
         vm.prank(alice);
         burrow.claim(1);
         assertEq(alice.balance - aBefore, aPrize);
-        vm.prank(bob);
-        burrow.claim(1);
-        vm.prank(bob);
+        vm.prank(alice);
         vm.expectRevert(Burrow.NothingToClaim.selector);
         burrow.claim(1);
 
-        // unclaimed shares roll over after 30 days
+        // bob sleeps through the claim window: his share is forfeited, not payable from a later season's pool
+        vm.expectRevert(Burrow.ClaimStillOpen.selector);
+        burrow.rollover(1);
         vm.warp(block.timestamp + 30 days + 1);
+        vm.prank(bob);
+        vm.expectRevert(Burrow.ClaimClosed.selector);
+        burrow.claim(1);
+        uint256 burrowBefore = address(burrow).balance;
         burrow.rollover(1);
         (,,,,,,,,,, uint256 pool1, uint256 paid1) = burrow.seasonInfo(1);
-        assertEq(pool1, paid1);
+        assertEq(pool1, paid1, "season 1 keeps only what it paid");
+        assertEq(paid1, aPrize);
+        assertEq(address(burrow).balance, burrowBefore, "rollover moves accounting, not ETH");
+        (,,,,,,,,,, uint256 poolNow,) = burrow.seasonInfo(burrow.cycleAt(block.timestamp));
+        assertGe(poolNow, bPrize, "bob's forfeited prize funds the cycle in progress");
     }
 
     function test_gasOfSwap() public {

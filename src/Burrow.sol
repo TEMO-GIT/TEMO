@@ -81,6 +81,8 @@ contract Burrow {
     error ClaimNotOpen();
     error NothingToClaim();
     error ClaimStillOpen();
+    error ClaimClosed();
+    error BadCommit();
     error ZeroAddress();
 
     event HookBound(address hook, uint40 launchedAt);
@@ -158,6 +160,7 @@ contract Burrow {
         if (launchedAt == 0) revert NotLaunched();
         uint32 s = cycleAt(block.timestamp);
         if (!windowOpen(s)) revert WindowClosed();
+        if (commit == bytes32(0)) revert BadCommit();
         Capsule storage c = _capsules[s][owner];
         if (c.commit != bytes32(0)) revert AlreadyBuried();
         c.commit = commit;
@@ -302,9 +305,11 @@ contract Burrow {
         }
     }
 
-    /// @notice ETH prize, after the self-reveal window closes.
+    /// @notice ETH prize: after the self-reveal window closes, within CLAIM_WINDOW. Later the prize is forfeited and
+    ///         `rollover` moves it on; paying after that would draw on another season's pool.
     function claim(uint32 season) external {
         if (block.timestamp <= seasonEnd(season) + SELF_REVEAL) revert ClaimNotOpen();
+        if (block.timestamp > seasonEnd(season) + SELF_REVEAL + CLAIM_WINDOW) revert ClaimClosed();
         Capsule storage c = _capsules[season][msg.sender];
         if (c.claimed) revert NothingToClaim();
         uint256 amount = prizeOf(season, msg.sender);
