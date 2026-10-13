@@ -17,7 +17,7 @@ import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 
 import {TemoToken} from "../src/TemoToken.sol";
 import {TemoHook} from "../src/TemoHook.sol";
-import {TemoModel, WeightsStore} from "../src/TemoModel.sol";
+import {TemoModel} from "../src/TemoModel.sol";
 import {Burrow} from "../src/Burrow.sol";
 import {Seeder} from "../src/Seeder.sol";
 import {ITemoModel, ITemoHook, ITemoToken, IPriceFeed} from "../src/interfaces/ITemo.sol";
@@ -38,12 +38,6 @@ contract MockFeed is IPriceFeed {
 
 /// @notice Full launch on a mainnet fork: real PoolManager and PositionManager, our contracts, the dev buy, trades
 ///         through the hook, a whole season with capsules. Run with --fork-url.
-contract WeightsFactory {
-    function make(bytes memory data) external returns (address) {
-        return WeightsStore.create(data);
-    }
-}
-
 contract LaunchTest is Test {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
@@ -80,14 +74,12 @@ contract LaunchTest is Test {
             assertEq(fresh[i].balance, 0, "test address not empty");
         }
 
-        // satellites: the team deploys them before launch; the mole is only an address in their constructors
+        // the launch graph: all five contracts, deployed by this test, which plays the graph factory;
+        // the mole is only an address in the constructors
         verifier = new MockVerifier();
         feed = new MockFeed();
-        WeightsFactory wf = new WeightsFactory();
         (bytes memory mrtd, bytes memory rtmrs) = QuoteOut.measurements(keccak256("temo enclave 2026"));
-        model = new TemoModel(mole, verifier, keccak256(mrtd), keccak256(rtmrs), wf.make(new bytes(177 * 2)));
-
-        // the launch graph (here: deployed by this test, which also plays the graph deployer)
+        model = new TemoModel(mole, verifier, keccak256(mrtd), keccak256(rtmrs), new bytes(177 * 2));
         seeder = new Seeder(dev, POSM, address(this));
         token = new TemoToken(address(seeder));
         burrow = new Burrow(mole, ITemoToken(address(token)), feed);
@@ -126,11 +118,19 @@ contract LaunchTest is Test {
             buyEth: 0.07 ether
         });
         mainId = seeder.ignite{value: 0.1 ether}(address(token), address(hook), p);
-        // the mole binds the hook now that it exists
-        vm.startPrank(mole);
+        // the graph's initializers bind the hook in the same transaction; nobody else can
+        vm.prank(mole);
+        vm.expectRevert(Burrow.NotDeployer.selector);
+        burrow.bindHook(ITemoHook(address(hook)));
+        vm.prank(mole);
+        vm.expectRevert(TemoModel.NotDeployer.selector);
+        model.setHook(ITemoHook(address(hook)));
         burrow.bindHook(ITemoHook(address(hook)));
         model.setHook(ITemoHook(address(hook)));
-        vm.stopPrank();
+        vm.expectRevert(Burrow.HookAlreadyBound.selector);
+        burrow.bindHook(ITemoHook(address(hook)));
+        vm.expectRevert(TemoModel.HookAlreadySet.selector);
+        model.setHook(ITemoHook(address(hook)));
     }
 
     function _buy(address who, uint256 ethIn, bytes memory hookData) internal returns (uint256 got) {

@@ -57,10 +57,12 @@ contract ModelTest is Test {
         (mrtd, rtmrs) = QuoteOut.measurements(keccak256("temo enclave test"));
         hook = new MockHook();
         factory = new WeightsFactory();
-        model = new TemoModel(mole, verifier, keccak256(mrtd), keccak256(rtmrs), factory.make(_zeroWeights()));
+        model = new TemoModel(mole, verifier, keccak256(mrtd), keccak256(rtmrs), _zeroWeights());
         hook.setModel(address(model));
         vm.prank(mole);
+        vm.expectRevert(TemoModel.NotDeployer.selector);
         model.setHook(ITemoHook(address(hook)));
+        model.setHook(ITemoHook(address(hook))); // this test deployed the model, as the launch graph would
     }
 
     /// @dev A valid quote: right body type, accepted TCB, pinned measurements, report data = the mole's address.

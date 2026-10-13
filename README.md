@@ -96,7 +96,6 @@ TEMO/ETH pool is observed; trades elsewhere do not count toward seasons, labels 
 
 The mole is a wallet whose key was generated inside a TDX enclave running a fixed container image. It can:
 
-- bind the hook to the model and the burrow, once, after launch;
 - prove itself once through `TemoModel.proveMole`;
 - commit new weights (the contract judges them);
 - publish every capsule's answers after a season, for the leaderboard.
@@ -107,15 +106,15 @@ hashes pinned at deployment. The proof is permanent and anyone can read it.
 
 ## Launch
 
-The team deploys the weights, the model and the burrow first, with the mole's address and the enclave measurements
-as constructor arguments; the burrow takes the token address predicted by the launch pack. The launch itself is one
-transaction through the Programmable launch router: it deploys the seeder, the token and the hook, with the model
-and the burrow as the hook's constructor arguments, then `Seeder.ignite` initializes the pool,
+The launch is one transaction through the Programmable launch router. It deploys all five contracts, with the
+mole's address, the enclave measurements and the v0 weights as constructor arguments, then runs their initializers
+in order: `TemoModel.setHook` binds the hook, `Seeder.ignite` initializes the pool,
 puts the entire supply into a single-sided position owned by `0x000000000000000000000000000000000000dEaD` through
 the canonical PositionManager, buys with part of the transaction value, seeds a second full-range position with the
 bought tokens and the remaining ETH, also owned by the dead address, and burns whatever is left over. No contract
-holds a withdrawal path for either position. The mole then binds the burrow and the model to the hook, once;
-until then the burrow ignores trades.
+holds a withdrawal path for either position. Finally `Burrow.bindHook` binds the hook, so the burrow counts every
+trade after the launch buy. Both binders accept only their deployer (the graph factory), only once, and only a hook
+that names them.
 
 For the first twenty swaps after the launch buy, a single buy may take at most 2% of the supply (20,000,000 tokens);
 a larger buy reverts. Sells are never capped, and from the twenty-first swap on there is no limit. Both numbers are

@@ -9,8 +9,8 @@ import {ITemoToken, ITemoHook, IPriceFeed} from "./interfaces/ITemo.sol";
 import {Grid125} from "./libraries/Grid125.sol";
 
 /// @title Burrow
-/// @notice Seasons, capsules, verdicts, payouts. No owner. The mole may only bind the hook (once) and publish
-///         answers; everything else is open to anyone.
+/// @notice Seasons, capsules, verdicts, payouts. No owner. The mole may only publish answers; everything else is
+///         open to anyone. The hook is bound once by the launch graph, in the launch transaction.
 ///  - a capsule is a hash of 9 answers + salt; the ciphertext goes to an event only
 ///  - tokens are never locked: capsule weight = min(balance at season start, balance at season end)
 ///  - the season pool is the capsule share of the hook fee collected during the cycle
@@ -31,6 +31,7 @@ contract Burrow {
     address public immutable mole;
     ITemoToken public immutable token;
     IPriceFeed public immutable priceFeed; // ETH/USD, 8 decimals
+    address public immutable deployer; // the launch graph factory; binds the hook once
     address public hook;
     uint40 public launchedAt; // start of window 1 = pool initialization
 
@@ -67,6 +68,7 @@ contract Burrow {
     mapping(uint32 season => uint256) public capsuleCount;
 
     error NotMole();
+    error NotDeployer();
     error NotHook();
     error HookAlreadyBound();
     error WrongHook();
@@ -100,13 +102,14 @@ contract Burrow {
         mole = mole_;
         token = token_;
         priceFeed = priceFeed_;
+        deployer = msg.sender;
     }
 
     // ================= wiring =================
 
-    /// @notice One-shot binding by the mole after launch: the hook must exist and name this burrow.
+    /// @notice One-shot binding by the deployer (the launch graph, after the pool is open): the hook must name this burrow.
     function bindHook(ITemoHook hook_) external {
-        if (msg.sender != mole) revert NotMole();
+        if (msg.sender != deployer) revert NotDeployer();
         if (hook != address(0)) revert HookAlreadyBound();
         if (address(hook_).code.length == 0 || hook_.burrow() != address(this)) revert WrongHook();
         uint40 t = hook_.launchedAt();
