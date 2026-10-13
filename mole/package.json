@@ -1,0 +1,15 @@
+{
+  "name": "temo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun --no-env-file scripts/build.js",
+    "release": "bun --no-env-file scripts/build.js release",
+    "test": "bun --no-env-file test ./services/mole/test"
+  },
+  "dependencies": {
+    "@phala/dcap-qvl": "0.6.5",
+    "tlock-js": "0.9.0",
+    "viem": "2.57.4"
+  }
+}

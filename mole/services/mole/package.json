@@ -1,0 +1,14 @@
+{
+  "name": "temo-mole",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun --no-env-file test ./test"
+  },
+  "dependencies": {
+    "@noble/curves": "1.9.1",
+    "@noble/hashes": "1.8.0",
+    "@phala/dstack-sdk": "0.5.8",
+    "viem": "2.57.4"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "verificationMode": "offchain-phala",
+  "transactionsEnabled": false,
+  "chainId": 1,
+  "deploymentBlock": "",
+  "hook": "",
+  "model": "",
+  "burrow": "",
+  "token": "",
+  "graphFactory": "",
+  "codeHashes": {
+    "hook": "",
+    "model": "",
+    "burrow": "",
+    "token": ""
+  },
+  "storePath": "",
+  "gasPolicy": {
+    "maxGas": "4000000",
+    "maxFeePerGas": "3000000000",
+    "maxPriorityFeePerGas": "1000000000",
+    "maxTransactionWei": "10000000000000000",
+    "dailyReserveWei": "100000000000000000"
+  },
+  "contractRevision": "a3ca5802ea7dda21823471349269bd328e75eb3a"
+}
